@@ -226,6 +226,36 @@ def test_change_status(tmp_path: Path) -> None:
         core.change_status(context, "cs-missing")
 
 
+def test_change_status_reports_the_azure_deployment_of_pipeline_steps(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    states = {"citadel-access-hr-chat-dev-1": "Succeeded", "citadel-access-hr-chat-dev-2": "not found"}
+    context.runtime.deployment_state = lambda subscription, location, name: states.get(name)
+    steps = [
+        {
+            "id": f"access-{n}",
+            "kind": "deploy",
+            "description": "access",
+            "template": "t.bicep",
+            "parametersFile": "p.bicepparam",
+            "location": "swedencentral",
+            "subscriptionId": "11111111-1111-1111-1111-111111111111",
+            "deploymentName": f"citadel-access-hr-chat-dev-{n}",
+        }
+        for n in (1, 2)
+    ]
+    change = _change(mode="pr", steps=steps)
+    context.runtime.store.save(change, {})
+
+    detail = core.change_status(context, change.id)
+
+    assert "Azure deployment citadel-access-hr-chat-dev-1: Succeeded" in detail
+    assert "Azure deployment citadel-access-hr-chat-dev-2: not found" in detail
+
+    direct = _change(mode="direct", steps=steps, id="cs-20261007-120001-abcdef")
+    context.runtime.store.save(direct, {})
+    assert "Azure deployment" not in core.change_status(context, direct.id)
+
+
 # Approvals and instructions --------------------------------------------------------------------
 
 

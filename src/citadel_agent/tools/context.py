@@ -40,6 +40,10 @@ class ToolContext:
         records = self.repository().intents("access-contract")
         return [r for r in records if environment is None or r.intent.environment == environment]
 
+    def publish_contracts(self, environment: str | None = None) -> list[IntentRecord]:
+        records = self.repository().intents("publish-contract")
+        return [r for r in records if environment is None or r.intent.environment == environment]
+
     def find_access_contract(
         self, business_unit: str, use_case: str, environment: str
     ) -> IntentRecord | None:

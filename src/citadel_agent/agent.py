@@ -10,6 +10,7 @@ from typing import Any
 from citadel_agent.changes.drafts import DraftStore
 from citadel_agent.knowledge.catalogs import load_catalogs
 from citadel_agent.skills import build_skills, build_skills_provider, load_playbooks, playbooks_for
+from citadel_agent.tool_routing import ToolRouter
 from citadel_agent.tools.access import register_access_tools
 from citadel_agent.tools.alerts import register_alert_tools
 from citadel_agent.tools.backend import register_backend_tools
@@ -18,11 +19,15 @@ from citadel_agent.tools.core import register_core_tools
 from citadel_agent.tools.diagnostics import register_diagnostic_tools
 from citadel_agent.tools.discovery import register_discovery_tools
 from citadel_agent.tools.operations import register_operations_tools
+from citadel_agent.tools.publish import register_publish_tools
 from citadel_agent.tools.registry import ToolRegistry
 from citadel_agent.tools.rotation import register_rotation_tools
 
 AGENT_NAME = "CitadelAgent"
 AGENT_DESCRIPTION = "Helps teams use and operate the Citadel Governance Hub AI gateway."
+# History is compacted once it nears this budget (tool results first, then the oldest turns).
+COMPACTION_WINDOW_TOKENS = 16_000
+COMPACTION_OUTPUT_TOKENS = 2_000
 
 GUIDELINES = """\
 How to work:
@@ -35,6 +40,10 @@ How to work:
 * Ask short clarifying questions, one or two at a time, when the environment, use case, model or
   limits are unclear.
 * Keep answers concise: short paragraphs, bullet lists and small tables.
+* Tools for drafting changes, diagnosing errors and reporting usage load when the user's message
+  names the task. If you lack a tool the user needs, ask them to say what they want to do, for
+  example onboard a use case, rotate a key, publish a tool, create an alert, show usage, or why a
+  call fails.
 
 Changes:
 * Record requested changes with the draft tools, then call prepare_change. Explain the summary and
@@ -56,6 +65,7 @@ class AgentBundle:
     agent: Any
     context: ToolContext
     registry: ToolRegistry
+    router: ToolRouter | None = None
 
 
 def build_instructions(runtime: Any) -> str:
@@ -97,27 +107,43 @@ def build_registry(context: ToolContext) -> ToolRegistry:
     register_rotation_tools(registry, context)
     register_backend_tools(registry, context)
     register_alert_tools(registry, context)
+    register_publish_tools(registry, context)
     return registry
 
 
-def create_agent(runtime: Any, *, client: Any = None) -> AgentBundle:
+def create_agent(runtime: Any, *, client: Any = None, registry: ToolRegistry | None = None) -> AgentBundle:
     """Create the agent for the runtime's caller (tools and skills filtered by persona)."""
-    from agent_framework import Agent
+    from agent_framework import (
+        Agent,
+        CompactionProvider,
+        ContextWindowCompactionStrategy,
+        InMemoryHistoryProvider,
+    )
 
     from citadel_agent.llm_client import create_chat_client
 
     state = runtime.store.directory.parent
     context = ToolContext(runtime=runtime, drafts=DraftStore(state / "drafts"))
-    registry = build_registry(context)
+    registry = registry or build_registry(context)
     persona = runtime.caller.persona.value
     playbooks = playbooks_for(load_playbooks(runtime.project_root / "skills"), persona)
     skills = build_skills(playbooks, runtime.docs(), load_catalogs())
+    router = ToolRouter(registry.build(persona))
+    # The history provider must run first so compaction sees the loaded history. Compaction only acts
+    # when the conversation outgrows the budget: it collapses old tool results, then drops old turns.
+    history = InMemoryHistoryProvider(skip_excluded=True)
+    compaction = CompactionProvider(
+        before_strategy=ContextWindowCompactionStrategy(
+            max_context_window_tokens=COMPACTION_WINDOW_TOKENS, max_output_tokens=COMPACTION_OUTPUT_TOKENS
+        ),
+        history_source_id=history.source_id,
+    )
     agent = Agent(
         client=client or create_chat_client(runtime),
         name=AGENT_NAME,
         description=AGENT_DESCRIPTION,
         instructions=build_instructions(runtime),
-        tools=registry.build(persona),
-        context_providers=[build_skills_provider(skills)],
+        tools=router.core,
+        context_providers=[history, build_skills_provider(skills), router, compaction],
     )
-    return AgentBundle(agent=agent, context=context, registry=registry)
+    return AgentBundle(agent=agent, context=context, registry=registry, router=router)

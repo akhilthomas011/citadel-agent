@@ -22,7 +22,7 @@ from citadel_agent.tools import TOOL_NAMES
 
 logger = logging.getLogger(__name__)
 PERSONAS = frozenset({"consumer", "operator"})
-MAX_TOOL_OUTPUT = 12000
+MAX_TOOL_OUTPUT = 8000
 
 
 class ToolInputError(ValueError):

@@ -15,8 +15,22 @@ Citadel manages the gateway through version-controlled contracts (`.bicepparam` 
 
 The agent always deploys through these upstream contracts. It never re-implements the infrastructure as code.
 
-> [!NOTE]
-> The project is in early development. The current build provides the contract engine, the setup commands and a conversational agent with documentation search, gateway overview and the prepare-and-approve change flow. Tools for drafting contracts, troubleshooting, usage and the other capabilities are in progress.
+## What it can do
+
+Application teams can:
+
+* Discover models and limits, and generate client code for OpenAI, Azure OpenAI, Agent Framework, LangChain, Semantic Kernel, curl and PowerShell
+* Onboard a use case or change its contract, with a what-if preview before anything deploys
+* Diagnose gateway errors, read gateway logs, smoke-test access and report usage and estimated cost
+* Rotate subscription keys without downtime and create alerts for a use case
+
+Platform operators can also:
+
+* Onboard model backends, discover deployments and manage model aliases, the circuit breaker and session affinity
+* Publish MCP tools and A2A agents (preview), then grant use cases access to them
+* Create gateway-wide alerts, check versions against the agent's tested range and keep the agent in step with upstream
+
+Changes go through a prepare and approve flow in either direct mode (development and test) or pull request mode (everywhere, and mandatory for production). See the [documentation](#documentation).
 
 ## Prerequisites
 
@@ -129,10 +143,26 @@ The agent never edits your working copy of the contracts repository. It keeps it
 | `citadel-agent llm-check`          | Verify the agent's model access through the gateway               |
 | `citadel-agent chat`               | Chat with the agent in the terminal                               |
 | `citadel-agent devui`              | Use the agent in the Agent Framework DevUI (local development)    |
+| `citadel-agent usage`              | Summarize model usage per request from the local usage log        |
 | `citadel-agent contracts validate` | Validate a contracts repository (used by its pull request checks) |
 | `citadel-agent contracts render`   | Regenerate the generated files of a contract from its intent      |
 | `citadel-agent contracts whatif`   | Preview a change set's deployments                                |
 | `citadel-agent contracts deploy`   | Deploy a merged change set (used by the deploy workflow)          |
+
+## Documentation
+
+| Guide                                             | For                                                        |
+|---------------------------------------------------|------------------------------------------------------------|
+| [Quickstart](docs/quickstart.md)                  | Application teams using the gateway                        |
+| [Operator guide](docs/operator-guide.md)          | Platform teams: admin policy, modes and operator workflows |
+| [Pull request deployments](docs/gitops-setup.md)  | Contracts repository CI/CD with GitHub Actions and OIDC    |
+| [Publishing tools and agents](docs/publishing.md) | MCP and A2A publish contracts (preview)                    |
+| [Security model](docs/security.md)                | Trust boundaries, approvals and secret handling            |
+| [Token usage](docs/token-usage.md)                | Tool routing, compaction and measuring input tokens        |
+| [Evaluations](docs/evaluations.md)                | Live behavior checks with a stubbed toolset                |
+| [Upstream sync](docs/upstream-sync.md)            | Moving the agent to a newer upstream Citadel commit        |
+| [Troubleshooting](docs/troubleshooting.md)        | Network, permissions, proxies and what-if noise            |
+| [Costs and teardown](docs/costs-and-teardown.md)  | Hub cost, model pricing and removing everything            |
 
 ## Upstream pin
 
@@ -143,6 +173,9 @@ The agent is built and tested against a specific upstream commit. The commit and
 | `citadel-agent version`         | Show the agent version and the pinned upstream release tracks |
 | `citadel-agent upstream status` | Confirm the submodule checkout matches `citadel.lock.json`    |
 | `citadel-agent upstream lock`   | Record the checked-out submodule commit in the lock file      |
+| `citadel-agent upstream sync`   | Compare with newer upstream; `--apply` moves the pin if safe  |
+
+`upstream sync` is a dry run by default: it diffs release tracks, template parameters and docs, runs the drift checks against the new commit and rates it SAFE, REVIEW or BLOCKED (`--report UPSTREAM-COMPAT.md` writes the details; `--check` exits 1 when BLOCKED). The weekly `upstream-sync` workflow runs it with `--apply` and opens a pull request.
 
 ## Project layout
 
@@ -163,4 +196,11 @@ The agent is built and tested against a specific upstream commit. The commit and
 uv run pytest
 uv run ruff check .
 uv run ruff format --check .
+```
+
+The live agent evaluations are opt in. They call a real model through the gateway with every tool stubbed:
+
+```bash
+$env:CITADEL_AGENT_EVALS = "1"
+uv run pytest tests/evals -m eval
 ```

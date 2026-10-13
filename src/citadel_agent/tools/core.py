@@ -7,12 +7,12 @@ Implementation functions take the :class:`ToolContext` and are unit-tested direc
 into tool schemas. (This module deliberately does not use postponed annotations.)
 """
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import Field
 
 from citadel_agent.changes.changeset import StepKind
-from citadel_agent.changes.drafts import DraftError
+from citadel_agent.changes.drafts import DraftError, effective_dependencies
 from citadel_agent.changes.engine import ChangeError, ChangeRequest, IntentChange, PrerequisiteStep
 from citadel_agent.changes.store import ChangeStoreError
 from citadel_agent.gateway.client import GatewayClient
@@ -96,10 +96,11 @@ def prepare_change(ctx: ToolContext, draft_ids: list[str], summary: str) -> str:
     environments = {d.intent.environment for d in drafts}
     if len(environments) != 1:
         raise ToolInputError("All drafts in one change must target the same environment")
+    dependencies = effective_dependencies(drafts)
     request = ChangeRequest(
         summary=summary,
         environment=environments.pop(),
-        changes=tuple(IntentChange(d.step_id, d.intent, d.operation, d.depends_on) for d in drafts),
+        changes=tuple(IntentChange(d.step_id, d.intent, d.operation, dependencies[d.id]) for d in drafts),
         prerequisites=tuple(
             {
                 p["stepId"]: PrerequisiteStep(
@@ -119,7 +120,7 @@ def prepare_change(ctx: ToolContext, draft_ids: list[str], summary: str) -> str:
         raise ToolInputError(f"The change could not be prepared: {exc}") from exc
     ctx.prepared[prepared.change.id] = list(draft_ids)
     return (
-        f"{prepared.summary()}\n\nchange_id: {prepared.change.id}\napproval_hash: {prepared.content_hash}\n"
+        f"change_id: {prepared.change.id}\napproval_hash: {prepared.content_hash}\n\n{prepared.summary()}\n\n"
         "Nothing has changed yet. Explain the summary to the user and ask for approval before calling "
         "execute_change with this change_id and approval_hash."
     )
@@ -140,6 +141,14 @@ def execute_change(ctx: ToolContext, change_id: str, approval_hash: str) -> str:
     if "next" in result:
         lines.append(f"Next: {result['next']}")
     return "\n".join(lines)
+
+
+def _azure_deployment_state(ctx: ToolContext, change: Any, step: Any) -> str | None:
+    """What Azure says about a pipeline-run step; pull-request changes deploy after the merge."""
+    lookup = getattr(ctx.runtime, "deployment_state", None)
+    if lookup is None or change.mode != "pr" or step.kind is not StepKind.DEPLOY or not step.deployment_name:
+        return None
+    return lookup(step.subscription_id or "", step.location, step.deployment_name)
 
 
 def change_status(ctx: ToolContext, change_id: str | None = None) -> str:
@@ -166,6 +175,9 @@ def change_status(ctx: ToolContext, change_id: str | None = None) -> str:
         lines.append(f"* Step {step.id} ({kind}): {step_status.get('status', 'pending')}")
         if step_status.get("error"):
             lines.append(f"  * Error: {step_status['error']}")
+        azure_state = _azure_deployment_state(ctx, change, step)
+        if azure_state:
+            lines.append(f"  * Azure deployment {step.deployment_name}: {azure_state}")
     pull_request = status.get("pullRequest")
     if pull_request:
         lines.append(f"* Pull request: {pull_request['url']}")

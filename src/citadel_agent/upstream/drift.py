@@ -16,7 +16,7 @@ Run it in CI and during ``citadel-agent upstream sync``.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -315,11 +315,16 @@ def template_parameters(template: Path) -> dict[str, dict[str, object]]:
     return dict(compiled.get("parameters", {}))
 
 
-def check_parameter_surface(layout: UpstreamLayout) -> list[DriftFinding]:
-    """Compare the parameters the agent renders with each upstream template's parameters."""
+def check_parameter_surface(
+    layout: UpstreamLayout, surfaces: Mapping[str, Mapping[str, dict[str, object]]] | None = None
+) -> list[DriftFinding]:
+    """Compare the parameters the agent renders with each upstream template's parameters.
+
+    ``surfaces`` supplies already compiled parameters per contract kind; otherwise the templates are compiled.
+    """
     findings: list[DriftFinding] = []
     for kind, template in layout.contract_templates().items():
-        upstream = template_parameters(template)
+        upstream = surfaces[kind] if surfaces is not None else template_parameters(template)
         agent = AGENT_PARAMETERS[kind]
         for name, expected_type in agent.items():
             if name not in upstream:

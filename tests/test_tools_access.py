@@ -43,7 +43,7 @@ def test_generated_code(framework: str, model: str, jwt: str | None) -> None:
         code = generate(request)
     except CodegenError:
         assert (framework in {"agent-framework", "openai-javascript"} and model_kind(model) != "chat") or (
-            framework == "langchain" and model_kind(model) == "images"
+            framework in {"langchain", "semantic-kernel"} and model_kind(model) == "images"
         )
         return
     assert "hr-chat-key" in code.code or framework == "openai-javascript"

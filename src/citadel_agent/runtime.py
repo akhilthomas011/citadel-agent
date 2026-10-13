@@ -16,7 +16,7 @@ from citadel_agent import __version__
 from citadel_agent.azure_clients.apim import ApimClient
 from citadel_agent.azure_clients.arm import ArmClient, ArmError, PermissionSet
 from citadel_agent.azure_clients.credentials import PrincipalInfo, create_credential, describe_principal
-from citadel_agent.azure_clients.deployments import DeploymentRunner
+from citadel_agent.azure_clients.deployments import DeploymentRunner, DeploymentTarget
 from citadel_agent.azure_clients.keyvault import KeyVaultReader, vault_url
 from citadel_agent.changes.engine import ChangeEngine, EngineServices
 from citadel_agent.changes.git_providers import GitHubProvider, GitProviderError, github_token
@@ -133,6 +133,20 @@ class AgentRuntime:
             return GitHubProvider(self.policy.gitops.repository)
         except GitProviderError as exc:
             logger.warning("GitHub provider unavailable: %s", exc)
+            return None
+
+    def deployment_state(self, subscription_id: str, location: str | None, name: str) -> str | None:
+        """Provisioning state of an ARM deployment, ``"not found"`` when it does not exist yet.
+
+        Returns None when it cannot be determined (for example no read access).
+        """
+        target = DeploymentTarget(scope="subscription", subscription_id=subscription_id, location=location)
+        try:
+            return DeploymentRunner(self.credential, subscription_id).get(target, name).provisioning_state
+        except Exception as exc:
+            if type(exc).__name__ in {"ResourceNotFoundError", "DeploymentNotFound"}:
+                return "not found"
+            logger.debug("Deployment state lookup failed: %s", exc)
             return None
 
     def engine(self) -> ChangeEngine:

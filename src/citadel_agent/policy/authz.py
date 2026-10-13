@@ -125,7 +125,9 @@ def cap_violations(intent: ContractIntent, caps: Caps) -> list[str]:
     for service in intent.services:
         if caps.allowed_service_codes and service.code not in caps.allowed_service_codes:
             problems.append(f"Service code {service.code} is not allowed in this environment")
-        problems.extend(_policy_cap_violations(service.code, service.policy, caps))
+        # Token and model caps govern LLM traffic; a service that only grants tools or agents has none.
+        if service.llm_apis or not service.is_multi_asset:
+            problems.extend(_policy_cap_violations(service.code, service.policy, caps))
     return problems
 
 

@@ -63,9 +63,11 @@ select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests", "tests/evals"]
 addopts = "-ra"
 asyncio_mode = "auto"
 markers = [
     "az: requires the Azure CLI and Bicep CLI on PATH",
     "integration: requires a deployed Citadel environment",
+    "eval: live agent evaluations (set CITADEL_AGENT_EVALS=1)",
 ]

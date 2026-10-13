@@ -199,6 +199,50 @@ def _new_contract(ctx: ToolContext, business_unit: str, use_case: str, env_name:
     }
 
 
+def _published_api_names(ctx: ToolContext, env_name: str) -> set[str]:
+    """APIs published through publish contracts in the repository or in pending drafts."""
+    names = {a.name for r in ctx.publish_contracts(env_name) for a in r.intent.assets}
+    for draft in ctx.drafts.list():
+        if draft.intent.kind == "publish-contract" and draft.intent.environment == env_name:
+            names |= {a.name for a in draft.intent.assets}
+    return names
+
+
+def _grant_published_apis(
+    data: dict[str, Any],
+    business_unit: str,
+    use_case: str,
+    env_name: str,
+    tool_apis: list[str],
+    agent_apis: list[str],
+    calls_per_minute: int | None,
+) -> None:
+    """Grant published tools and agents through a MULTI service; the LLM service stays untouched."""
+    service = next((s for s in data["services"] if s["code"] == "MULTI"), None)
+    if service is None:
+        prefix = f"{business_unit}-{use_case}-MULTI-{env_name}".upper()
+        service = {
+            "code": "MULTI",
+            "apis": [],
+            "keySecretName": f"{prefix}-KEY",
+            "publishAllAssetEndpoints": True,
+            "policy": {},
+        }
+        data["services"].append(service)
+    for api in [*tool_apis, *agent_apis]:
+        if api not in service["apis"]:
+            service["apis"].append(api)
+    for field, mine, other in (("toolApis", tool_apis, agent_apis), ("agentApis", agent_apis, tool_apis)):
+        kept = [a for a in service.get(field, []) if a not in other]
+        service[field] = list(dict.fromkeys([*kept, *mine]))
+    policy = service.setdefault("policy", {})
+    for field, mine in (("toolLimits", tool_apis), ("agentLimits", agent_apis)):
+        if calls_per_minute is not None and mine:
+            policy[field] = {**policy.get(field, {}), "calls": calls_per_minute}
+        if service[field.replace("Limits", "Apis")] and field not in policy:
+            raise ToolInputError("Ask the user for the call limit and set asset_calls_per_minute")
+
+
 def draft_access_contract(
     ctx: ToolContext,
     business_unit: str,
@@ -219,6 +263,9 @@ def draft_access_contract(
     foundry_project: str | None = None,
     foundry_auth: str | None = None,
     draft_id: str | None = None,
+    tool_apis: list[str] | None = None,
+    agent_apis: list[str] | None = None,
+    asset_calls_per_minute: int | None = None,
 ) -> str:
     env_name = ctx.environment_name(environment)
     env = ctx.environment(env_name)
@@ -269,6 +316,16 @@ def draft_access_contract(
         }
         if foundry_auth:
             foundry["authType"] = foundry_auth
+    unknown_apis: list[str] = []
+    if tool_apis or agent_apis:
+        tool_apis, agent_apis = list(dict.fromkeys(tool_apis or [])), list(dict.fromkeys(agent_apis or []))
+        if set(tool_apis) & set(agent_apis):
+            raise ToolInputError("An API is either a tool or an agent, not both")
+        _grant_published_apis(
+            data, business_unit, use_case, env_name, tool_apis, agent_apis, asset_calls_per_minute
+        )
+        known = _published_api_names(ctx, env_name)
+        unknown_apis = [a for a in [*tool_apis, *agent_apis] if a not in known]
     if existing is None and "tokenLimit" not in policy:
         raise ToolInputError(
             "Ask the user for the expected volume and set tokens_per_minute for a new contract"
@@ -292,9 +349,15 @@ def draft_access_contract(
         intent, operation=Operation.ACCESS_WRITE, created_by=ctx.caller, draft_id=draft_id
     )
     action = "Change to the existing contract" if existing is not None else "New contract"
+    note = (
+        f"Warning: {', '.join(unknown_apis)} not found in publish contracts of {env_name}; "
+        "they must already be published on the gateway, otherwise deploying fails.\n\n"
+        if unknown_apis
+        else ""
+    )
     return (
         f"{action} drafted (draft_id: {draft.id}).\n\n"
-        f"{describe_intent(intent, env.key_vault.name if env.key_vault else None)}\n\n"
+        f"{describe_intent(intent, env.key_vault.name if env.key_vault else None)}\n\n{note}"
         "Nothing is deployed yet. Confirm the details with the user, then call prepare_change "
         "with this draft_id."
     )
@@ -345,6 +408,15 @@ def register_access_tools(registry: ToolRegistry, ctx: ToolContext) -> None:
         draft_id: Annotated[
             str | None, Field(description="Revise this draft instead of creating a new one.")
         ] = None,
+        tool_apis: Annotated[
+            list[str] | None, Field(description="Published MCP tool API names to grant.")
+        ] = None,
+        agent_apis: Annotated[
+            list[str] | None, Field(description="Published A2A agent API names to grant.")
+        ] = None,
+        asset_calls_per_minute: Annotated[
+            int | None, Field(gt=0, description="Calls per minute for the granted tools or agents.")
+        ] = None,
     ) -> str:
         return draft_access_contract(
             ctx,
@@ -366,6 +438,9 @@ def register_access_tools(registry: ToolRegistry, ctx: ToolContext) -> None:
             foundry_project,
             foundry_auth,
             draft_id,
+            tool_apis,
+            agent_apis,
+            asset_calls_per_minute,
         )
 
     registry.add(

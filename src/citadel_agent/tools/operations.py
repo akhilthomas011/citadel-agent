@@ -20,6 +20,7 @@ from citadel_agent.azure_clients.cosmos import (
     cosmos_endpoint,
 )
 from citadel_agent.azure_clients.keyvault import KeyVaultAccessError, KeyVaultReader, vault_url
+from citadel_agent.connectivity import diagnose
 from citadel_agent.gateway.client import GatewayClient
 from citadel_agent.knowledge.catalogs import load_catalogs
 from citadel_agent.tools.context import ToolContext
@@ -173,7 +174,7 @@ def usage_report(
         rows, pricing = _cosmos_usage(ctx, env, products, days)
         source = "Cosmos DB usage records"
     except Exception as exc:
-        notes.append(f"Cosmos DB was not available ({str(exc).splitlines()[0][:200]}).")
+        notes.append(f"Cosmos DB was not available. {diagnose(str(exc), 'Cosmos DB').summary}")
         rows = _metric_usage(ctx, env, products, days)
         source = "Application Insights token metrics (usage only, no cost)"
     totals: dict[str, dict[str, Any]] = defaultdict(
@@ -195,7 +196,8 @@ def usage_report(
             bucket["cost"] += cost
             currency = str(entry.get("Currency", currency)) if entry else currency
     if not rows:
-        return f"No usage in the last {days} days ({source}). Usage data can lag by several minutes."
+        empty = f"No usage in the last {days} days ({source}). Usage data can lag by several minutes."
+        return "\n".join([empty, *notes])
     header = f"| {group_by.capitalize()} | Prompt tokens | Cached | Completion tokens | Total |"
     separator = "|---|---|---|---|---|"
     if priced_any:
@@ -267,18 +269,16 @@ def backend_contract_summary(ctx: ToolContext, environment: str | None = None) -
     return "\n".join(lines)
 
 
-def _check(label: str, run: Any) -> tuple[str, str]:
+def _check(label: str, run: Any, resource: str = "the resource", roles: str | None = None) -> tuple[str, str]:
     try:
         detail = run()
     except KeyVaultAccessError as exc:
-        return "blocked", str(exc)
+        text = str(exc)
+        return ("blocked" if "network rules" in text else "missing role"), text
     except Exception as exc:
-        text = str(exc).splitlines()[0][:180]
-        if "firewall" in text.lower() or "blocked" in text.lower() or "not authorized" in text.lower():
-            return "blocked", text
-        if "403" in text or "Forbidden" in text or "AuthorizationFailed" in text:
-            return "missing role", text
-        return "error", text
+        diagnosis = diagnose(str(exc), resource, roles)
+        status = {"firewall": "blocked", "rbac": "missing role", "unreachable": "unreachable"}
+        return status.get(diagnosis.kind, "error"), diagnosis.summary
     return "ok", detail or label
 
 
@@ -322,14 +322,13 @@ def preflight(ctx: ToolContext, environment: str | None = None) -> str:
         )
     if env.cosmos is not None:
         cosmos = CosmosUsageReader(runtime.credential, cosmos_endpoint(env.cosmos.account_name))
-        status, detail = _check("usage readable", lambda: f"databases: {', '.join(cosmos.list_databases())}")
-        rows.append(
-            (
-                f"Cosmos DB {env.cosmos.account_name}",
-                status,
-                detail if status == "ok" else f"{detail} Needs {roles('read-usage-cosmos')}.",
-            )
+        status, detail = _check(
+            "usage readable",
+            lambda: f"databases: {', '.join(cosmos.list_databases())}",
+            f"Cosmos DB {env.cosmos.account_name}",
+            roles("read-usage-cosmos"),
         )
+        rows.append((f"Cosmos DB {env.cosmos.account_name}", status, detail))
     if env.log_analytics_workspace_id:
         from citadel_agent.azure_clients.monitor import LogQuery
 
@@ -340,10 +339,8 @@ def preflight(ctx: ToolContext, environment: str | None = None) -> str:
             result = query.query_workspace(workspace, "AppMetrics | take 1", timespan=timedelta(hours=1))
             return f"{len(result.rows)} sample rows"
 
-        status, detail = _check("logs readable", sample_logs)
-        rows.append(
-            ("Log Analytics", status, detail if status == "ok" else f"{detail} Needs {roles('read-logs')}.")
-        )
+        status, detail = _check("logs readable", sample_logs, "Log Analytics", roles("read-logs"))
+        rows.append(("Log Analytics", status, detail))
     provider = runtime.git_provider()
     rows.append(
         (

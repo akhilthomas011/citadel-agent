@@ -17,6 +17,7 @@ Framework = Literal[
     "azure-openai-python",
     "agent-framework",
     "langchain",
+    "semantic-kernel",
     "curl",
     "powershell",
     "openai-javascript",
@@ -26,6 +27,7 @@ FRAMEWORKS: tuple[str, ...] = (
     "azure-openai-python",
     "agent-framework",
     "langchain",
+    "semantic-kernel",
     "curl",
     "powershell",
     "openai-javascript",
@@ -230,6 +232,56 @@ def _langchain(request: CodeRequest) -> GeneratedCode:
     return GeneratedCode("python", code, ("langchain-openai", "azure-identity", "azure-keyvault-secrets"))
 
 
+def _semantic_kernel(request: CodeRequest) -> GeneratedCode:
+    if request.kind == "images":
+        raise CodegenError("Semantic Kernel snippets are for chat and embedding models")
+    api_key = "token" if request.jwt_scope else '"unused"'
+    client = [
+        "from openai import AsyncOpenAI",
+        "",
+        "client = AsyncOpenAI(",
+        f'    base_url="{request.v1_url}",',
+        f"    api_key={api_key},",
+        f'    default_headers={{"api-key": api_key, "x-app-id": "{request.app_id}"}},',
+        ")",
+    ]
+    if request.kind == "embeddings":
+        body = [
+            "from semantic_kernel.connectors.ai.open_ai import OpenAITextEmbedding",
+            "",
+            f'service = OpenAITextEmbedding(ai_model_id="{request.model}", async_client=client)',
+            "",
+            "async def main() -> None:",
+            '    vectors = await service.generate_embeddings(["Citadel gateway"])',
+            "    print(len(vectors[0]))",
+        ]
+    else:
+        body = [
+            "from semantic_kernel.connectors.ai.open_ai import (",
+            "    OpenAIChatCompletion,",
+            "    OpenAIChatPromptExecutionSettings,",
+            ")",
+            "from semantic_kernel.contents import ChatHistory",
+            "",
+            f'service = OpenAIChatCompletion(ai_model_id="{request.model}", async_client=client)',
+            "",
+            "async def main() -> None:",
+            "    history = ChatHistory()",
+            f'    history.add_user_message("{PROMPT}")',
+            "    reply = await service.get_chat_message_content(",
+            "        chat_history=history, settings=OpenAIChatPromptExecutionSettings()",
+            "    )",
+            "    print(reply)",
+        ]
+    code = "\n".join(
+        ["import asyncio", "", _python_key(request), "", *client, "", *body, "", "asyncio.run(main())"]
+    )
+    notes = ("Chat Completions works with pooled backends; avoid the stateful Responses connector there.",)
+    return GeneratedCode(
+        "python", code, ("semantic-kernel", "azure-identity", "azure-keyvault-secrets"), notes
+    )
+
+
 def _payload(request: CodeRequest) -> tuple[str, str]:
     if request.kind == "embeddings":
         return "embeddings", f'{{"model": "{request.model}", "input": ["Citadel gateway"]}}'
@@ -325,6 +377,7 @@ _GENERATORS = {
     "azure-openai-python": _azure_openai_python,
     "agent-framework": _agent_framework,
     "langchain": _langchain,
+    "semantic-kernel": _semantic_kernel,
     "curl": _curl,
     "powershell": _powershell,
     "openai-javascript": _openai_javascript,

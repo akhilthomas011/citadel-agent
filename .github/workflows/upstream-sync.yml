@@ -1,0 +1,243 @@
+# Weekly (and on demand) upstream synchronization.
+#
+# Checks whether the upstream Citadel repository (the git submodule recorded in citadel.lock.json)
+# has a newer commit, evaluates it with `citadel-agent upstream sync`, and opens a pull request that
+# moves the pin. The report (UPSTREAM-COMPAT.md) becomes the pull request description.
+#
+#   SAFE     - ready for review, opened as a normal pull request when the tests pass.
+#   REVIEW   - compatible, but something changed that a human must read; opened as a draft.
+#   BLOCKED  - the pin is NOT moved (sync refuses); a draft pull request carries only the report so
+#              the incompatibility is tracked. Fix the agent on that branch before moving the pin.
+#
+# The `sync` job runs the agent and the tests with read-only permissions. The `propose` job holds
+# the write permissions, runs no repository code (only git and gh) and receives nothing but the
+# updated lock file and the report. Only GITHUB_TOKEN is used; there is no Azure access.
+#
+# Repository setting required: Settings > Actions > General > "Allow GitHub Actions to create and
+# approve pull requests". Pull requests opened with GITHUB_TOKEN do not trigger other workflows.
+name: upstream-sync
+
+on:
+  schedule:
+    - cron: "17 5 * * 1" # Mondays, 05:17 UTC
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Upstream branch or commit to move to (default: tip of the locked branch)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      proposal: ${{ steps.result.outputs.proposal }}
+      changed: ${{ steps.result.outputs.changed }}
+      verdict: ${{ steps.result.outputs.verdict }}
+      new_commit: ${{ steps.result.outputs.new_commit }}
+      short: ${{ steps.result.outputs.short }}
+      title: ${{ steps.result.outputs.title }}
+      draft: ${{ steps.result.outputs.draft }}
+      tests: ${{ steps.result.outputs.tests }}
+    steps:
+      - name: Check out the agent with the pinned upstream submodule
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Install the Bicep CLI (used to compare template parameter surfaces)
+        run: az bicep install
+
+      - name: Install the agent and its development dependencies
+        run: uv sync --all-extras
+
+      - name: Evaluate upstream and move the pin when it is compatible
+        id: sync
+        shell: bash
+        env:
+          SYNC_REF: ${{ inputs.ref }}
+        run: |
+          set -uo pipefail
+          args=(--apply --report UPSTREAM-COMPAT.md)
+          if [ -n "${SYNC_REF:-}" ]; then
+            args+=(--ref "$SYNC_REF")
+          fi
+          status=0
+          uv run citadel-agent upstream sync "${args[@]}" || status=$?
+          # 0 = synced or nothing to do, 1 = blocked (pin not moved), 2 = configuration error.
+          if [ "$status" -ge 2 ] || [ ! -f UPSTREAM-COMPAT.md ]; then
+            echo "::error::citadel-agent upstream sync failed with exit code $status"
+            exit 1
+          fi
+
+      - name: Detect whether the pin moved
+        id: moved
+        shell: bash
+        run: |
+          if [ -n "$(git status --porcelain -- citadel.lock.json upstream/ai-hub-gateway)" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run the test suite against the new upstream commit
+        id: tests
+        if: steps.moved.outputs.changed == 'true'
+        continue-on-error: true
+        run: uv run pytest -q
+
+      - name: Summarize the result
+        id: result
+        shell: bash
+        env:
+          CHANGED: ${{ steps.moved.outputs.changed }}
+          TESTS: ${{ steps.tests.outcome }}
+        run: |
+          set -euo pipefail
+          header=$(head -n 1 UPSTREAM-COMPAT.md)
+          verdict=$(sed -nE 's/.*verdict=([A-Z]+) .*/\1/p' <<<"$header")
+          old=$(sed -nE 's/.* old=([0-9a-f]{40}) .*/\1/p' <<<"$header")
+          new=$(sed -nE 's/.* new=([0-9a-f]{40}) .*/\1/p' <<<"$header")
+          if [ -z "$verdict" ] || [ -z "$old" ] || [ -z "$new" ]; then
+            echo "::error::Could not read the verdict and commits from the report header."
+            exit 1
+          fi
+          short=${new:0:7}
+
+          proposal=false
+          if [ "$CHANGED" = "true" ] || { [ "$verdict" = "BLOCKED" ] && [ "$old" != "$new" ]; }; then
+            proposal=true
+          fi
+
+          draft=false
+          title="Sync upstream Citadel to $short"
+          case "$verdict" in
+            REVIEW) draft=true; title="$title (REVIEW)" ;;
+            BLOCKED) draft=true; title="[BLOCKED] $title" ;;
+          esac
+          if [ "$TESTS" = "failure" ]; then
+            draft=true
+            title="$title - tests failing"
+          fi
+
+          {
+            echo "proposal=$proposal"
+            echo "changed=$CHANGED"
+            echo "verdict=$verdict"
+            echo "new_commit=$new"
+            echo "short=$short"
+            echo "title=$title"
+            echo "draft=$draft"
+            echo "tests=${TESTS:-skipped}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Verdict $verdict, upstream $old -> $new, pin moved: $CHANGED, tests: ${TESTS:-skipped}"
+
+      - name: Collect the files the pull request needs
+        if: steps.result.outputs.proposal == 'true'
+        run: |
+          mkdir bundle
+          cp citadel.lock.json UPSTREAM-COMPAT.md bundle/
+
+      - name: Upload the proposal
+        if: steps.result.outputs.proposal == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: upstream-sync
+          path: bundle/
+          retention-days: 7
+          if-no-files-found: error
+
+  propose:
+    needs: sync
+    if: needs.sync.outputs.proposal == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CHANGED: ${{ needs.sync.outputs.changed }}
+      VERDICT: ${{ needs.sync.outputs.verdict }}
+      NEW_COMMIT: ${{ needs.sync.outputs.new_commit }}
+      SHORT: ${{ needs.sync.outputs.short }}
+      TITLE: ${{ needs.sync.outputs.title }}
+      DRAFT: ${{ needs.sync.outputs.draft }}
+      TESTS: ${{ needs.sync.outputs.tests }}
+      BASE: ${{ github.event.repository.default_branch }}
+    steps:
+      # The credentials are kept for pushing the branch; this job runs no repository code.
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+
+      - name: Download the proposal
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: upstream-sync
+          path: bundle
+
+      - name: Create the branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="upstream-sync/$SHORT"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch --create "$branch"
+          if [ "$CHANGED" = "true" ]; then
+            git -C upstream/ai-hub-gateway fetch --depth 1 origin "$NEW_COMMIT"
+            git -C upstream/ai-hub-gateway checkout --detach "$NEW_COMMIT"
+            cp bundle/citadel.lock.json citadel.lock.json
+            git add citadel.lock.json upstream/ai-hub-gateway
+            git commit -m "chore(upstream): sync Citadel upstream to $SHORT"
+          else
+            cp bundle/UPSTREAM-COMPAT.md UPSTREAM-COMPAT.md
+            git add UPSTREAM-COMPAT.md
+            git commit -m "docs(upstream): record incompatible upstream commit $SHORT"
+          fi
+          git push --force origin "HEAD:refs/heads/$branch"
+
+      - name: Open or update the pull request
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="upstream-sync/$SHORT"
+          {
+            echo "Automated upstream sync to \`$SHORT\`. Verdict: **$VERDICT**. Tests: **$TESTS**."
+            if [ "$CHANGED" != "true" ]; then
+              echo
+              echo "The pin was **not** moved because the new commit is incompatible. This branch only"
+              echo "carries the report; do not merge it. Fix the agent first, see *Next steps* below."
+            fi
+            echo
+            tail -n +2 bundle/UPSTREAM-COMPAT.md
+          } > pr-body-full.md
+          # GitHub limits pull request descriptions to 65536 characters.
+          head -c 60000 pr-body-full.md > pr-body.md
+
+          existing=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title "$TITLE" --body-file pr-body.md
+          else
+            flags=()
+            if [ "$DRAFT" = "true" ]; then
+              flags+=(--draft)
+            fi
+            gh pr create --base "$BASE" --head "$branch" --title "$TITLE" --body-file pr-body.md "${flags[@]}"
+          fi

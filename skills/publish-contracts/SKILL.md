@@ -14,17 +14,17 @@ Publish contracts (preview) put MCP servers and A2A agents behind the gateway, w
 
 ## Interview
 
-1. Asset type: MCP server (existing remote MCP endpoint) or A2A agent (including a Foundry agent).
-2. Name, environment and the backend URL.
-3. How the gateway authenticates to the backend: none, a key from Key Vault, or the gateway's managed identity.
+1. Asset type: MCP tool from an existing gateway API (`mcp-from-api`), remote MCP server (`mcp-existing`), A2A agent (`a2a`) or Foundry agent (`foundry-agent`).
+2. Name, environment and the backend URL (for a Foundry agent: the project resource ID and agent name).
+3. How the gateway authenticates to the backend: none, a key from Key Vault (a secret URI, never the key), or the gateway's managed identity.
 4. Which use cases should get access, and with what call limits.
 
 ## Workflow
 
-1. Call `draft_publish_contract` with the answers and fix validation errors with the user.
-2. Call `draft_access_contract` for each use case that needs access, listing the published API as a tool or agent API.
+1. Call `draft_publish_contract` with the answers and fix validation errors with the user. It drafts one asset per call; repeat with the same contract name or draft ID to add more assets to the contract. Name or path collisions with existing published assets are reported.
+2. Call `draft_access_contract` for each use case that needs access, listing the published API as a tool API or agent API, with a call limit per minute.
 3. Call `prepare_change` with all drafts. The publish step runs first; the access steps depend on it, so their what-if is deferred until the API exists.
-4. Explain any manual prerequisites in the plan (for example Foundry agent settings or role assignments). They are run by an authorized person unless the admin policy allows the agent to run them.
+4. Explain any manual prerequisites in the plan (for example Foundry agent settings or role assignments). They are always run by an authorized person; the agent never performs them.
 5. Get approval and call `execute_change`.
 
 ## Decision rules

@@ -21,6 +21,7 @@ from citadel_agent.changes.engine import PreparedChange
 from citadel_agent.changes.store import ChangeStoreError
 from citadel_agent.settings import Settings
 from citadel_agent.tools.context import ToolContext
+from citadel_agent.usage_log import USAGE_FILE, TurnUsage, UsageLog
 
 console = Console()
 EXIT_COMMANDS = {"/exit", "/quit", "exit", "quit"}
@@ -109,22 +110,30 @@ def typed_confirmation(context: ToolContext, arguments: dict[str, Any]) -> str |
     return None
 
 
-async def run_turn(agent: Any, session: Any, message: Any, approve: Any) -> None:
-    """Send one user message, stream the answer and resolve approval requests."""
+async def run_turn(agent: Any, session: Any, message: Any, approve: Any) -> TurnUsage:
+    """Send one user message, stream the answer and resolve approval requests.
+
+    Returns the model usage of the turn, one entry per model request.
+    """
     from agent_framework import Message
 
+    usage = TurnUsage()
     pending = message
     while True:
         stream = agent.run(pending, session=session, stream=True)
+        seen = len(usage.requests)
         async for update in stream:
+            usage.add_update(update)
             if update.text:
                 sys.stdout.write(update.text)
                 sys.stdout.flush()
         final = await stream.get_final_response()
+        if len(usage.requests) == seen:
+            usage.add_details(getattr(final, "usage_details", None))
         sys.stdout.write("\n")
         requests = list(final.user_input_requests or [])
         if not requests:
-            return
+            return usage
         responses = [request.to_function_approval_response(approve(request)) for request in requests]
         pending = Message(role="user", contents=responses)
 
@@ -153,6 +162,7 @@ def chat(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
     sessions = FileSessionStore(runtime.store.directory.parent / "sessions")
+    usage_log = UsageLog(runtime.store.directory.parent / USAGE_FILE)
 
     def approve(request: Any) -> bool:
         call = getattr(request, "function_call", None)
@@ -197,7 +207,17 @@ def chat(
                 continue
             console.print("[bold green]agent[/bold green]")
             try:
-                await run_turn(bundle.agent, session, text, approve)
+                usage = await run_turn(bundle.agent, session, text, approve)
+                route = bundle.router.last if bundle.router is not None else None
+                tool_names = [t.name for t in bundle.router.core] if bundle.router is not None else []
+                usage_log.record(
+                    usage,
+                    session_id=session.session_id,
+                    tools=[*tool_names, *(route.tool_names if route else ())],
+                    domains=route.domains if route else (),
+                )
+                if usage.requests:
+                    console.print(f"[dim]{usage.summary()}[/dim]")
             except Exception as exc:
                 from citadel_agent.safety.redaction import default_redactor
 
@@ -206,6 +226,37 @@ def chat(
         console.print(f"Resume this conversation with: citadel-agent chat --resume {session.session_id}")
 
     asyncio.run(main())
+
+
+def usage(
+    last: Annotated[int, typer.Option(help="Show only the most recent N requests (0 for all).")] = 0,
+) -> None:
+    """Summarize model usage per request from the local usage log (counts only, never content)."""
+    from rich.table import Table
+
+    from citadel_agent.paths import find_project_root, state_dir
+    from citadel_agent.usage_log import USAGE_FILE, summarize
+
+    settings = Settings()
+    path = (settings.state_dir or state_dir(find_project_root())) / USAGE_FILE
+    totals = summarize(path, last=last)
+    if not totals:
+        console.print(f"No usage recorded yet. Chat with the agent first ({path}).")
+        return
+    table = Table(title="Model usage per request", show_header=False)
+    table.add_column("Measure", style="bold")
+    table.add_column("Value", justify="right")
+    labels = {
+        "requests": "Model requests",
+        "input_total": "Input tokens (total)",
+        "output_total": "Output tokens (total)",
+        "input_average": "Input per request (average)",
+        "input_p90": "Input per request (90th percentile)",
+        "input_max": "Input per request (largest)",
+    }
+    for key, label in labels.items():
+        table.add_row(label, f"{totals[key]:,}")
+    console.print(table)
 
 
 def devui(
