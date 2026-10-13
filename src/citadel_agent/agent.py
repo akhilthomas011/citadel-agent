@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -111,7 +112,13 @@ def build_registry(context: ToolContext) -> ToolRegistry:
     return registry
 
 
-def create_agent(runtime: Any, *, client: Any = None, registry: ToolRegistry | None = None) -> AgentBundle:
+def create_agent(
+    runtime: Any,
+    *,
+    client: Any = None,
+    registry: ToolRegistry | None = None,
+    middleware_factory: Callable[[ToolContext], list[Any]] | None = None,
+) -> AgentBundle:
     """Create the agent for the runtime's caller (tools and skills filtered by persona)."""
     from agent_framework import (
         Agent,
@@ -145,5 +152,6 @@ def create_agent(runtime: Any, *, client: Any = None, registry: ToolRegistry | N
         instructions=build_instructions(runtime),
         tools=router.core,
         context_providers=[history, build_skills_provider(skills), router, compaction],
+        middleware=middleware_factory(context) if middleware_factory else None,
     )
     return AgentBundle(agent=agent, context=context, registry=registry, router=router)

@@ -29,6 +29,15 @@ Every change follows the same path, and each step narrows what can go wrong:
 
 An approval request whose hash does not match the stored change is refused automatically, without asking the user.
 
+### Approval in the DevUI
+
+The DevUI approval card shows only the raw call, and it cannot ask for typed confirmation. Two safeguards close those gaps:
+
+* Before every `execute_change` approval card, the DevUI conversation shows the stored change set (summary, what-if, approval hash and what approval will do), read from disk and not from the model. A request that does not match a stored change is flagged with a warning to reject it.
+* An irreversible step, regenerating the old key in a rotation, is refused if it is approved in the DevUI, because the typed `ROTATE` confirmation is not possible there. Approve that step in `citadel-agent chat`.
+
+The terminal chat renders the same stored change in its own approval prompt.
+
 ## Secrets
 
 Secrets are blocked structurally, then redacted as a second layer.

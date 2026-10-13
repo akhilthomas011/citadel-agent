@@ -271,13 +271,14 @@ def devui(
         raise typer.Exit(1) from exc
 
     from citadel_agent.agent import create_agent
+    from citadel_agent.approval_ui import devui_middleware
     from citadel_agent.runtime import build_runtime
 
     use_utf8_console()
     warnings.filterwarnings("ignore", message=r"\[SESSION_STORE\]")
     settings = Settings()
     configure_telemetry(settings)
-    bundle = create_agent(build_runtime(settings))
+    bundle = create_agent(build_runtime(settings), middleware_factory=devui_middleware)
     # The agent can deploy changes, so the local API always requires a token.
     token = secrets.token_urlsafe(32)
     console.print(

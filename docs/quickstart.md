@@ -86,6 +86,20 @@ You can roll back before step 3. While a rotation is active, unrelated changes t
 
 Do not paste keys, tokens or connection strings. If you do, the agent does not repeat them and tells you to rotate the exposed key. Credentials live in Key Vault, and the agent gives you the secret name and code that reads it.
 
+## Use the browser UI
+
+`citadel-agent devui` serves the same agent in the Agent Framework DevUI at `http://127.0.0.1:8080`. It prints an access token that the page asks for, because the agent can deploy changes.
+
+```bash
+uv run citadel-agent devui
+```
+
+Pick `CitadelAgent`, enter the token and chat as usual. The DevUI shows token usage per message and the tool calls in its Events panel. Approvals work the same way, with these differences from the terminal chat:
+
+* The stored change set appears in the conversation just before the Approve and Reject buttons.
+* Regenerating the old key in a rotation cannot be approved in the DevUI. Use `citadel-agent chat` for that step.
+* It does not write `.citadel-agent/usage.jsonl` or save sessions.
+
 ## Next steps
 
 * [Troubleshooting](troubleshooting.md) for network, permission and package problems
