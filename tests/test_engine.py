@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from datetime import UTC, datetime
@@ -694,3 +695,23 @@ def test_pr_manifest_detects_edited_files(seed: Path, tmp_path: Path) -> None:
     contract = repo / "contracts" / "access" / "hr" / "chat" / "dev" / "contract.yaml"
     contract.write_text(contract.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     assert any("differs from the prepared change set" in e for e in _validate(repo))
+
+
+def test_newer_change_set_supersedes_older_manifest_files(seed: Path, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    shutil.copytree(seed, repo)
+    harness = Harness(repo, tmp_path, can_deploy=False)
+    first = harness.engine.prepare(request(IntentChange("access", access(), Operation.ACCESS_WRITE)))
+    harness.engine.execute(first.change.id, first.content_hash)
+    contract = repo / "contracts" / "access" / "hr" / "chat" / "dev" / "contract.yaml"
+    manifests = repo / ".citadel" / "changesets"
+
+    # A later change set rewrites the same contract file and records its own digest.
+    contract.write_text(contract.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    digest = hashlib.sha256(contract.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
+    later = json.loads((manifests / f"{first.change.id}.json").read_text(encoding="utf-8"))
+    later["files"] = {"contracts/access/hr/chat/dev/contract.yaml": f"sha256:{digest}"}
+    (manifests / "cs-99991231-235959-zzzzzz.json").write_text(json.dumps(later), encoding="utf-8")
+
+    errors = [e for e in _validate(repo) if "differs from the prepared change set" in e]
+    assert errors == []

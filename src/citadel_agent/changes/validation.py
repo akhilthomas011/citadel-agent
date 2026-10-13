@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -181,18 +182,27 @@ def validate_repository(
             except BicepCompileError as exc:
                 error(str(rendered.deployment.parameters_file), f"does not compile: {exc}")
 
-    # Change-set manifests must match the files they describe.
+    # Change-set manifests must match the files they describe. A later change set supersedes an
+    # earlier one for the files it touches, so only the newest manifest per file is checked
+    # (otherwise a contract first deployed through a pull request could never change again).
     changesets = repo.path(PurePosixPath(CITADEL_DIR) / "changesets")
+    manifests: list[tuple[str, str, dict[str, Any]]] = []
     for manifest_path in sorted(changesets.glob("*.json")) if changesets.is_dir() else []:
         rel = manifest_path.relative_to(repo.root).as_posix()
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifests.append((rel, manifest_path.stem, json.loads(manifest_path.read_text(encoding="utf-8"))))
         except ValueError as exc:
             error(rel, f"invalid JSON: {exc}")
-            continue
+    newest: dict[str, str] = {}
+    for _, change_id, manifest in manifests:
+        for path in manifest.get("files") or {}:
+            newest[path] = max(newest.get(path, change_id), change_id)
+    for rel, change_id, manifest in manifests:
         if manifest.get("executedBy") == "direct":
             continue
         for path, digest in (manifest.get("files") or {}).items():
+            if newest[path] != change_id:
+                continue
             current = repo.path(path)
             if digest == "deleted":
                 if current.exists():
