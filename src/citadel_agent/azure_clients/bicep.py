@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import tempfile
 from dataclasses import dataclass, field
@@ -20,6 +21,12 @@ from typing import Any
 from citadel_agent.proc import CommandError, run_command
 
 _USING = re.compile(r"^\s*using\s+'(?P<path>[^']+)'", re.MULTILINE)
+# Local files a Bicep source pulls in: modules, imports and the load*() functions. Registry
+# references (br:, br/, ts:) are not local files and are skipped.
+_LOCAL_REFERENCE = re.compile(
+    r"(?:\bmodule\s+\w+\s+|\bimport\s+(?:\{[^}]*\}|\*\s+as\s+\w+)\s+from\s+|\bload\w+\(\s*)'(?P<path>[^']+)'"
+)
+_SOURCE_SUFFIXES = (".bicep", ".json", ".txt", ".xml", ".yaml", ".yml", ".md", ".kql", ".bicepparam")
 _DIAGNOSTIC = re.compile(
     r"^(?P<file>.+?)\((?P<line>\d+),(?P<column>\d+)\)\s*:\s*(?P<level>Error|Warning|Info)\s+"
     r"(?P<code>[A-Za-z0-9-]+):\s*(?P<message>.*)$"
@@ -71,6 +78,33 @@ def _without_generator(node: Any) -> Any:
     return node
 
 
+def _is_local_reference(reference: str) -> bool:
+    return not reference.startswith(("br:", "br/", "ts:", "http:", "https:")) and reference.endswith(
+        _SOURCE_SUFFIXES
+    )
+
+
+def source_files(template_file: Path) -> dict[str, bytes]:
+    """The template source and every local file it references, keyed by a machine-independent path.
+
+    Line endings are normalized, so a checkout with CRLF endings hashes like one with LF.
+    """
+    root = template_file.resolve()
+    pending, seen = [root], {}
+    while pending:
+        path = pending.pop()
+        if path in seen or not path.is_file():
+            continue
+        data = path.read_bytes().replace(b"\r\n", b"\n")
+        seen[path] = data
+        if path.suffix == ".bicep":
+            text = data.decode("utf-8", errors="replace")
+            for match in _LOCAL_REFERENCE.finditer(text):
+                if _is_local_reference(match["path"]):
+                    pending.append((path.parent / match["path"]).resolve())
+    return {Path(os.path.relpath(p, root.parent)).as_posix(): data for p, data in seen.items()}
+
+
 @dataclass(frozen=True)
 class CompiledDeployment:
     """A compiled ARM template with its parameter values, ready for what-if or deployment."""
@@ -83,9 +117,16 @@ class CompiledDeployment:
 
     @property
     def template_hash(self) -> str:
-        # The compiler version must not change the hash, or a change prepared with one Bicep
-        # version could never be deployed from a pipeline that has another.
-        return canonical_hash(_without_generator(self.template))
+        """Identity of the template, taken from its Bicep sources.
+
+        The compiled ARM JSON depends on the Bicep compiler version (a pipeline may run a newer
+        Bicep than the machine that prepared the change), so it cannot be compared across machines.
+        The sources are fixed by the pinned upstream commit.
+        """
+        sources = source_files(self.template_file)
+        if not sources:
+            return canonical_hash(_without_generator(self.template))
+        return canonical_hash({name: hashlib.sha256(data).hexdigest() for name, data in sources.items()})
 
     @property
     def parameters_hash(self) -> str:
