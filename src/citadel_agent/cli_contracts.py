@@ -151,8 +151,20 @@ def deploy(repo: RepoOption = Path("."), manifest: ManifestOption = Path()) -> N
             console.print(f"Skipping manual prerequisite '{step.id}': {step.description}")
             continue
         compiled = compile_deployment(repo / Path(*(step.parameters_file or "").split("/")))
-        if compiled.parameters_hash != step.parameters_hash or compiled.template_hash != step.template_hash:
-            err_console.print(f"[red]{step.id}: compiled output differs from the prepared change set.[/red]")
+        mismatched = [
+            f"{label} (prepared {prepared[:19]}, now {current[:19]})"
+            for label, prepared, current in (
+                ("parameters", step.parameters_hash, compiled.parameters_hash),
+                ("template", step.template_hash, compiled.template_hash),
+            )
+            if prepared != current
+        ]
+        if mismatched:
+            bicep = compiled.template.get("metadata", {}).get("_generator", {}).get("version", "unknown")
+            err_console.print(
+                f"[red]{step.id}: compiled output differs from the prepared change set: "
+                f"{'; '.join(mismatched)}. Compiled with Bicep {bicep}.[/red]"
+            )
             raise typer.Exit(1)
         target = DeploymentTarget(
             scope="subscription", subscription_id=step.subscription_id or "", location=step.location
