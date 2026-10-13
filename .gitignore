@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Local-only tool configuration (for example, a corporate package index for uv)
+uv.toml
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local.bicepparam
+*.secrets.bicepparam
+
+# Agent runtime state: drafts, change sets, sessions, audit logs
+.citadel-agent/
+
+# Editors and OS files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Not published: internal package-proxy lock file, local tool and editor files
+uv.lock
+.roo/
+*.code-workspace

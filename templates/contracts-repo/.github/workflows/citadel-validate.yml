@@ -1,0 +1,51 @@
+# Unprivileged pull request validation. No cloud credentials are available to this workflow.
+name: citadel-validate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the pull request with the pinned upstream submodule
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Restrict agent pull requests to contract paths
+        if: startsWith(github.head_ref, 'citadel-agent/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          changed=$(git diff --name-only "origin/${{ github.base_ref }}"...HEAD)
+          disallowed=$(echo "$changed" | grep -Ev '^(contracts/|\.citadel/(rotations|locks|changesets)/)' || true)
+          if [ -n "$disallowed" ]; then
+            echo "Agent pull requests may only change contracts and change records. Disallowed paths:"
+            echo "$disallowed"
+            exit 1
+          fi
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Install the Citadel Agent at the version pinned for this repository
+        shell: bash
+        env:
+          CITADEL_AGENT_PACKAGE: ${{ vars.CITADEL_AGENT_PACKAGE }}
+        run: |
+          if [ -z "$CITADEL_AGENT_PACKAGE" ]; then
+            echo "::error::Set the repository variable CITADEL_AGENT_PACKAGE to the pinned Citadel Agent package, for example git+https://github.com/<org>/<agent-repository>@<commit>."
+            exit 1
+          fi
+          uv tool install "$CITADEL_AGENT_PACKAGE"
+
+      - name: Validate contracts (schema, generated files, policies, caps, secrets, Bicep compile)
+        shell: bash
+        run: citadel-agent contracts validate --repo . --base "origin/${{ github.base_ref }}" --compile

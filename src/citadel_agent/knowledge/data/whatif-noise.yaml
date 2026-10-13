@@ -1,0 +1,24 @@
+# Deterministic what-if "noise": predicted changes that appear on every deployment of an unchanged
+# contract. The agent labels them so users are not alarmed. Patterns are regular expressions on
+# the resource ID (case-insensitive). All entries were observed on a deployed hub.
+version: 1
+noise:
+  - id: apim-product-api-link
+    resourcePattern: "/providers/Microsoft\\.ApiManagement/service/[^/]+/products/[^/]+/apis/[^/]+$"
+    changeTypes: [Create]
+    explanation: API Management product-to-API links always show as created; redeploying an existing link changes nothing.
+  - id: apim-rawxml-policy
+    resourcePattern: "/providers/Microsoft\\.ApiManagement/service/[^/]+/(products|apis)/[^/]+/policies/policy$"
+    changeTypes: [Modify]
+    propertyPaths: [properties.format, properties.value]
+    explanation: API Management stores policies in its own XML format, so a policy deployed as raw XML always shows as modified. Compare the generated policy file in the pull request to see real changes.
+  - id: apim-subscription-defaults
+    resourcePattern: "/providers/Microsoft\\.ApiManagement/service/[^/]+/subscriptions/[^/]+$"
+    changeTypes: [Modify]
+    propertyPaths: [properties.allowTracing]
+    explanation: The template does not set allowTracing, which API Management adds by default; the subscription and its keys are unchanged.
+  - id: apim-backend-pool-member-ids
+    resourcePattern: "/providers/Microsoft\\.ApiManagement/service/[^/]+/backends/[^/]+$"
+    changeTypes: [Modify]
+    propertyPaths: [properties.pool.services.0.id, properties.pool.services.1.id, properties.pool.services.2.id, properties.pool.services.3.id]
+    explanation: API Management stores pool members as full resource IDs while the template uses short IDs; the pool members are unchanged.

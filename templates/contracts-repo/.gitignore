@@ -1,0 +1,8 @@
+# Local overrides and secrets never belong in the contracts repository
+*.local.bicepparam
+*.secrets.bicepparam
+.env
+.env.*
+
+# Agent runtime state
+.citadel-agent/

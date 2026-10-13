@@ -1,0 +1,482 @@
+# Citadel error catalog used by the troubleshooting tools.
+#
+# Status codes and error codes come from the pinned upstream policy sources (``evidence``), and the
+# drift tests fail when an evidence string disappears upstream. ``verified`` records how an entry
+# was confirmed: ``live`` (observed on a deployed hub), ``source`` (read from the pinned policy XML)
+# or ``docs`` (upstream documentation only).
+version: 1
+errors:
+  - id: missing-subscription-key
+    title: The request has no subscription key, or the key is not valid
+    status: 401
+    messagePattern: "(missing|invalid) subscription key"
+    source: apim-platform
+    owner: consumer
+    causes:
+      - The request did not send the `api-key` (or `Ocp-Apim-Subscription-Key`) header, or the key is wrong or was rotated.
+    fixes:
+      - Read the key from the Key Vault secret named by the access contract (`keySecretName`) and send it in the `api-key` header. A subscription key is always required, even when JWT is enabled.
+    checks: [smoke_test, describe_access_contract]
+    docs: [guides/llm-access-guide.md#access-control]
+    verified: live
+
+  - id: invalid-api-key
+    title: Citadel rejected the API key
+    status: 401
+    codes: [unauthorized]
+    source: citadel-policy
+    owner: consumer
+    causes:
+      - The key does not belong to an active subscription of a Citadel product.
+    fixes:
+      - Use the key from the access contract's Key Vault secret. If the key was rotated, read the secret again.
+    checks: [smoke_test, describe_access_contract]
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-security-handler.xml, contains: 'JProperty("code", "unauthorized")'}
+    verified: source
+
+  - id: product-required
+    title: The request was not made through a product subscription
+    status: 401
+    codes: [product_required]
+    source: citadel-policy
+    owner: consumer
+    causes:
+      - The key belongs to a subscription that is not scoped to a Citadel product (for example an all-APIs or admin subscription).
+    fixes:
+      - Use the key of the access contract's product subscription (`<code>-<bu>-<usecase>-<env>-SUB-01`).
+    checks: [describe_access_contract]
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/unified-ai-api-policy.xml, contains: 'JProperty("code", "product_required")'}
+    verified: source
+
+  - id: jwt-required
+    title: The product requires a JWT bearer token
+    status: 401
+    codes: [jwt_required]
+    source: citadel-policy
+    owner: consumer
+    causes:
+      - "The access contract sets `jwtRequired` and the request has no `Authorization: Bearer` token."
+    fixes:
+      - Acquire a token for the gateway app registration (scope `api://<gateway-app-id>/.default`) and send it with the subscription key.
+    checks: [describe_access_contract, decode_jwt]
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-security-handler.xml, contains: 'JProperty("code", "jwt_required")'}
+    docs: [guides/entraid-auth-validation.md#error-responses]
+    verified: source
+
+  - id: jwt-invalid
+    title: The JWT bearer token is invalid or expired
+    status: 401
+    messagePattern: "invalid or expired JWT"
+    source: citadel-policy
+    owner: consumer
+    causes:
+      - The token expired, or its audience (`aud`) or issuer (`iss`) does not match. A v1 token has issuer `https://sts.windows.net/<tenant>/`; a v2 token has `https://login.microsoftonline.com/<tenant>/v2.0`.
+      - A Foundry project identity token needs audience `https://cognitiveservices.azure.com` and the v1 issuer, set through the contract's JWT overrides.
+    fixes:
+      - Decode the token (never share it) and compare `aud`, `iss` and `exp` with the contract's JWT settings.
+    checks: [decode_jwt, describe_access_contract]
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-security-handler.xml, contains: 'failed-validation-error-message="Access denied due to invalid or expired JWT bearer token."'}
+    docs:
+      - guides/entraid-auth-validation.md#troubleshooting-common-issues
+      - bicep/infra/citadel-access-contracts/citadel-access-contracts-policy.md#foundry-projectmanagedidentity-jwt-validation-policy
+    verified: source
+
+  - id: jwt-not-configured
+    title: JWT validation is not configured on the gateway
+    status: 503
+    codes: [jwt_not_configured]
+    source: citadel-policy
+    owner: operator
+    causes:
+      - The JWT named values still hold the placeholder `not-configured` because the Entra ID setup was not run.
+    fixes:
+      - "Operator: run `bicep/infra/entra-id-setup/setup.ps1` for the hub, or give the contract explicit JWT overrides."
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-security-handler.xml, contains: 'JProperty("code", "jwt_not_configured")'}
+    docs: [guides/entraid-auth-validation.md#setup]
+    verified: source
+
+  - id: insufficient-role
+    title: The token lacks a required app role
+    status: 403
+    codes: [insufficient_role]
+    source: citadel-policy
+    owner: consumer
+    causes:
+      - The contract sets `requiredRoles` and the token's `roles` claim contains none of them.
+    fixes:
+      - Ask an identity admin to assign one of the required app roles (directly or through a group) to the calling identity.
+    checks: [decode_jwt, describe_access_contract]
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-security-handler.xml, contains: 'JProperty("code", "insufficient_role")'}
+    docs: [guides/entraid-auth-validation.md#app-role-based-authorization]
+    verified: source
+
+  - id: model-not-allowed
+    title: The model is not allowed for this product
+    status: 403
+    codes: [unauthorized_model_access]
+    source: citadel-policy
+    owner: consumer
+    causes:
+      - The requested model is not in the access contract's `allowedModels`. The response lists the allowed models in `allowed_models`. (Some upstream docs say 401; the policy returns 403.)
+    fixes:
+      - Use an allowed model, or change the access contract to add the model.
+    checks: [describe_access_contract, list_models]
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-validate-model-access.xml, contains: 'JProperty("code", "unauthorized_model_access")'}
+    docs: [bicep/infra/citadel-access-contracts/citadel-access-contracts-policy.md#model-access-control-policy]
+    verified: live
+
+  - id: backend-pool-forbidden
+    title: The backend pool is not allowed for this client
+    status: 403
+    codes: [backend_pool_access_forbidden]
+    source: citadel-policy
+    owner: consumer
+    causes:
+      - The contract restricts `allowedBackendPools` and the model is served by a pool outside that list.
+    fixes:
+      - Change the access contract's allowed backend pools, or use a model served by an allowed pool.
+    checks: [describe_access_contract, backend_contract_summary]
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-set-target-backend-pool.xml, contains: 'JProperty("code", "backend_pool_access_forbidden")'}
+    docs: [bicep/infra/llm-backend-onboarding/README.md#403-forbidden-error]
+    verified: source
+
+  - id: path-not-allowed
+    title: The Unified AI path is not recognized
+    status: 403
+    codes: [PathNotAllowed]
+    source: citadel-policy
+    owner: consumer
+    causes:
+      - The path under `/unified-ai` matches none of the supported API types (OpenAI-compatible `/v1`, Azure-style `/openai/deployments`, or the native Bedrock, Gemini and Claude paths).
+    fixes:
+      - Use a supported path, for example `/unified-ai/v1/chat/completions`.
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-request-processor.xml, contains: '"code": "PathNotAllowed"'}
+    docs: [guides/llm-access-guide.md#unified-ai-api--unified-ai--recommended]
+    verified: source
+
+  - id: token-quota-exceeded
+    title: The long-term token quota is exhausted
+    status: 403
+    requiresHeader: retry-after
+    messagePattern: "quota"
+    source: apim-platform
+    owner: consumer
+    causes:
+      - The product's `token-quota` for the period (Monthly or Weekly) is used up. Unlike a 429 this does not clear within a minute. A quota 403 carries a `Retry-After` header; an authorization 403 does not.
+    fixes:
+      - Wait for the quota period to reset, or change the access contract to raise `tokenQuota`.
+    checks: [usage_report, describe_access_contract]
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-raise-alert-events.xml, contains: AITokenQuotaExceeded}
+    docs: [bicep/infra/citadel-access-contracts/citadel-access-contracts-policy.md#model-capacity-management-policy]
+    verified: source
+
+  - id: rate-limited
+    title: Too many tokens or requests per minute
+    status: 429
+    source: apim-platform
+    owner: consumer
+    causes:
+      - The product's tokens-per-minute limit (`llm-token-limit`) was exceeded, or the model backend throttled the request.
+    fixes:
+      - Back off and honor `Retry-After`. If it persists, raise the contract's tokens per minute or ask the platform team for more backend capacity.
+    checks: [usage_report, describe_access_contract, backend_contract_summary]
+    docs:
+      - bicep/infra/citadel-access-contracts/citadel-access-contracts-policy.md#model-capacity-management-policy
+      - guides/llm-access-guide.md#retry-logic
+    verified: docs
+
+  - id: response-id-forbidden
+    title: The Responses API ID belongs to another caller
+    status: 403
+    codes: [response_id_forbidden]
+    source: citadel-policy
+    owner: consumer
+    causes:
+      - A stored response is bound to the subscription, product, model and user that created it (for 30 days).
+    fixes:
+      - Call with the same subscription and model that created the response, or start a new response.
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-responses-id-security.xml, contains: 'JProperty("code", "response_id_forbidden")'}
+    verified: source
+
+  - id: response-id-not-found
+    title: The Responses API ID is unknown or expired
+    status: 404
+    codes: [response_id_not_found]
+    source: citadel-policy
+    owner: consumer
+    causes:
+      - The response ID never existed or is older than the 30-day binding window.
+      - With pooled backends and no session affinity, a follow-up call can reach a backend that does not hold the response.
+    fixes:
+      - Create a new response. For multi-turn work prefer Chat Completions, or ask the platform team to enable session affinity for the model.
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-responses-id-security.xml, contains: 'JProperty("code", "response_id_not_found")'}
+    docs: [bicep/infra/llm-backend-onboarding/README.md#session-affinity-configuration]
+    verified: source
+
+  - id: deployment-not-found
+    title: The model deployment does not exist
+    status: 404
+    codes: [DeploymentNotFound]
+    source: citadel-policy
+    owner: consumer
+    causes:
+      - The model name in a discovery call (`/unified-ai/deployments/<model>`) is not onboarded or not allowed for the product.
+    fixes:
+      - List the available models with `GET /unified-ai/deployments`.
+    checks: [list_models]
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/unified-ai-api-deployment-by-name-policy.xml, contains: '{ "code", "DeploymentNotFound" }'}
+    verified: live
+
+  - id: missing-model
+    title: The model could not be detected
+    status: 400
+    codes: [missing_model_parameter, extraction_missing_model_parameter]
+    source: citadel-policy
+    owner: consumer
+    causes:
+      - The request names no model in the body, the path or (for multipart image edits) the `x-ai-model` header.
+    fixes:
+      - 'Send the model in the body (`"model": "<name>"`), use a deployment path, or add `x-ai-model` for image edits.'
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-set-target-backend-pool.xml, contains: 'JProperty("code", "missing_model_parameter")'}
+      - {file: bicep/infra/modules/apim/policies/frag-set-llm-requested-model.xml, contains: 'JProperty("code", "extraction_missing_model_parameter")'}
+    verified: source
+
+  - id: unsupported-model
+    title: The model is not onboarded
+    status: 400
+    codes: [unsupported_model]
+    source: citadel-policy
+    owner: operator
+    causes:
+      - No backend contract serves this model name (it is not onboarded, or the name or alias is misspelled).
+    fixes:
+      - List the available models. If the model is needed, the platform team onboards it through the backend contract.
+    checks: [list_models, backend_contract_summary]
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-set-target-backend-pool.xml, contains: '"unsupported_model"'}
+    docs: [bicep/infra/llm-backend-onboarding/README.md#model-not-supported-error]
+    verified: source
+
+  - id: model-wrong-surface
+    title: The model is not available on this API surface
+    status: 400
+    codes: [model_not_available_on_this_surface]
+    source: citadel-policy
+    owner: consumer
+    causes:
+      - The model is hosted by a pool type (for example Bedrock, Gemini or Claude) that needs a native path on the Unified AI API.
+    fixes:
+      - Use the native path named in the error message, for example `/unified-ai/bedrock/...`.
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-set-target-backend-pool.xml, contains: '"model_not_available_on_this_surface"'}
+    docs: [guides/llm-access-guide.md#pool-isolation-compatible-pool-types]
+    verified: source
+
+  - id: alias-no-compatible-member
+    title: The model alias has no member compatible with this surface
+    status: 400
+    codes: [alias_no_compatible_member]
+    source: citadel-policy
+    owner: operator
+    causes:
+      - Every model behind the alias is hosted by a pool type that this API surface cannot call.
+    fixes:
+      - Call through a compatible surface, or ask the platform team to add a compatible member to the alias.
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-set-target-backend-pool.xml, contains: 'JProperty("code", "alias_no_compatible_member")'}
+    docs: [guides/llm-access-guide.md#compatible-pool-types-filter-on-alias-members]
+    verified: source
+
+  - id: unsupported-operation
+    title: The image operation is not supported by this backend type
+    status: 400
+    codes: [unsupported_operation]
+    source: citadel-policy
+    owner: consumer
+    causes:
+      - The image operation (for example an edit) is not available for the pool type that serves the model.
+    fixes:
+      - Use a model whose backend supports the operation.
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-path-builder.xml, contains: 'JProperty("code", "unsupported_operation")'}
+    docs: [guides/llm-access-guide.md#image-models]
+    verified: source
+
+  - id: pii-detected
+    title: The request was blocked because it contains PII
+    status: 400
+    codes: [PII_DETECTED]
+    source: agent-policy
+    owner: consumer
+    causes:
+      - The access contract enables PII blocking. The response lists `detectedCategories`.
+    fixes:
+      - Remove the personal data, or ask for anonymization instead of blocking in the access contract.
+    checks: [describe_access_contract]
+    evidence:
+      - {file: bicep/infra/citadel-access-contracts/citadel-access-contracts-policy.md, contains: 'new JProperty("code", "PII_DETECTED")'}
+    docs: [bicep/infra/citadel-access-contracts/citadel-access-contracts-policy.md#pii-handling-policy]
+    verified: source
+
+  - id: pii-service-failed
+    title: The PII anonymization service is unavailable
+    status: 502
+    codes: [PIIAnonymizationFailed]
+    source: citadel-policy
+    owner: operator
+    causes:
+      - The Azure AI Language call failed and the contract fails closed (`continueOnNLPError` is off).
+    fixes:
+      - Usually transient; retry. The platform team checks the Language resource and its network access.
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-pii-anonymization.xml, contains: '["code"] = "PIIAnonymizationFailed"'}
+    docs: [guides/pii-masking-apim.md#configuration--limits]
+    verified: source
+
+  - id: content-safety-blocked
+    title: Content safety blocked the request
+    status: 403
+    messagePattern: "content.?safety|jailbreak|prompt.?shield|harmful"
+    source: apim-platform
+    owner: consumer
+    causes:
+      - The `llm-content-safety` policy flagged the prompt (or a prompt-shield attack) above the configured thresholds. Input over about 10K characters is not supported by prompt shields.
+    fixes:
+      - Rephrase the prompt. If it is a false positive, ask the platform team to review the thresholds in the access contract.
+    docs: [bicep/infra/citadel-access-contracts/citadel-access-contracts-policy.md#content-safety-policy]
+    verified: docs
+
+  - id: aws-credentials-not-configured
+    title: Amazon Bedrock credentials are not configured
+    status: 500
+    codes: [AWSCredentialsNotConfigured]
+    source: citadel-policy
+    owner: operator
+    causes:
+      - The APIM named values `aws-access-key`, `aws-secret-key` and `aws-region` still hold placeholders.
+    fixes:
+      - "Operator: set the named values (from Key Vault) and redeploy the Bedrock backend."
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-set-backend-authorization.xml, contains: '"code": "AWSCredentialsNotConfigured"'}
+    docs: [bicep/infra/llm-backend-onboarding/README.md#500-awscredentialsnotconfigured-error]
+    verified: source
+
+  - id: path-build-error
+    title: The gateway could not build the backend path
+    status: 500
+    codes: [PathBuildError]
+    source: citadel-policy
+    owner: operator
+    causes:
+      - The request reached an API type for which the path builder has no rule.
+    fixes:
+      - Check the request path. If it is a supported path, the platform team investigates with the request's activity ID.
+    checks: [gateway_logs]
+    evidence:
+      - {file: bicep/infra/modules/apim/policies/frag-path-builder.xml, contains: 'JProperty("code", "PathBuildError")'}
+    verified: source
+
+  - id: backend-url-not-defined
+    title: No backend was selected for the request
+    status: 500
+    messagePattern: "Internal server error"
+    logMessagePattern: "Backend service URL is not defined"
+    source: apim-platform
+    owner: consumer
+    causes:
+      - The request selected no model backend. Model-list calls such as `GET /unified-ai/v1/models` (the OpenAI SDK's `models.list()`) fail this way at the pinned upstream version.
+    fixes:
+      - Use `GET /unified-ai/deployments` (or `GET /models/models`) to list models.
+    checks: [gateway_logs, list_models]
+    verified: live
+
+  - id: backend-unavailable
+    title: The model backend is unavailable
+    status: 503
+    source: apim-platform
+    owner: operator
+    causes:
+      - Every backend in the model's pool is failing or its circuit breaker is open (the breaker trips after repeated 429 or 5xx responses).
+    fixes:
+      - Retry after the circuit breaker trip duration. If it persists, the platform team checks backend health and capacity.
+    checks: [backend_contract_summary, gateway_logs]
+    docs: [guides/llm-access-guide.md#circuit-breaker-protection]
+    verified: docs
+
+  - id: backend-failure
+    title: The model backend failed
+    status: 502
+    source: apim-platform
+    owner: operator
+    causes:
+      - The backend returned an error or could not be reached (also reported as 500 or 504).
+    fixes:
+      - Retry. If it persists, look the request's activity ID up in the gateway logs.
+    checks: [gateway_logs]
+    verified: docs
+
+  - id: mcp-tool-call-unauthorized
+    title: MCP tools are listed but calling a tool returns 401
+    status: 401
+    surfaces: [mcp]
+    source: citadel-policy
+    owner: operator
+    causes:
+      - The API behind the MCP server requires its own subscription key, which the published MCP server does not forward.
+    fixes:
+      - "Operator: fix the publish contract so the tool's backend accepts the gateway's call (key forwarding or backend authentication)."
+    docs: [bicep/infra/citadel-publish-contracts/publish-contract-guide.md#backend-auth-backendauthtype]
+    verified: docs
+
+  - id: key-vault-firewall
+    title: Key Vault blocked the request (network rules)
+    status: 403
+    messagePattern: "ForbiddenByFirewall|Client address is not authorized"
+    surfaces: [azure]
+    source: azure
+    owner: operator
+    causes:
+      - The vault allows only selected networks. Citadel deploys Key Vault with private access by default.
+    fixes:
+      - Run the agent from inside the hub network, or (dev environments only) add the client address to the vault firewall.
+    verified: live
+
+  - id: cosmos-firewall
+    title: Cosmos DB blocked the request (network rules)
+    status: 403
+    messagePattern: "blocked by your Cosmos DB account firewall"
+    surfaces: [azure]
+    source: azure
+    owner: operator
+    causes:
+      - The usage database allows only selected networks or private endpoints.
+    fixes:
+      - Run the agent from inside the hub network, or (dev environments only) allow the client address. Usage reports fall back to Application Insights metrics.
+    verified: docs
+
+  - id: entra-consent-or-app
+    title: Entra ID rejected the token request
+    messagePattern: "AADSTS(65001|700016|7000215)"
+    surfaces: [entra]
+    source: entra
+    owner: identity-admin
+    causes:
+      - "AADSTS65001: consent or role assignment is missing. AADSTS700016: wrong client ID or tenant. AADSTS7000215: invalid client secret."
+    fixes:
+      - Ask an identity admin to grant consent or the app role, or correct the client ID, tenant or secret.
+    docs: [guides/entraid-auth-validation.md#configuring-client-application-identities]
+    verified: docs

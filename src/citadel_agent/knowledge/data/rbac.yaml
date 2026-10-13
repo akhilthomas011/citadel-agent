@@ -1,0 +1,41 @@
+# Azure roles each agent capability needs (for preflight checks and permission explanations).
+version: 1
+capabilities:
+  - id: read-gateway
+    description: Read gateway versions, the live backend contract and model discovery.
+    roles: []
+    scope: None (the version endpoints need no credentials; discovery uses a subscription key).
+  - id: read-apim
+    description: Inventory products, subscriptions and APIs through Azure Resource Manager.
+    roles: [Reader, API Management Service Reader Role]
+    scope: The API Management instance.
+  - id: deploy-access-contract
+    description: Deploy access contracts (products, subscriptions, policies and Key Vault secrets).
+    roles: [API Management Service Contributor, Key Vault Secrets Officer]
+    scope: "Subscription-scope deployments, plus the API Management instance and the target Key Vault."
+    notes: "Foundry connections also need the Azure AI Developer role on the Foundry project."
+    docs: [bicep/infra/citadel-access-contracts/README.md#-prerequisites]
+  - id: deploy-backend-contract
+    description: Deploy backend contracts (backends, pools, aliases).
+    roles: [API Management Service Contributor]
+    scope: The API Management instance. The gateway's managed identity also needs Cognitive Services User (or Azure AI User) on each model resource.
+  - id: deploy-publish-contract
+    description: Publish MCP tools and A2A agents.
+    roles: [API Management Service Contributor]
+    scope: The API Management instance (and API Center when registration is enabled).
+  - id: deploy-alerts
+    description: Deploy Azure Monitor alert rules and action groups.
+    roles: [Monitoring Contributor]
+    scope: The resource group that holds the alert rules.
+  - id: read-key-vault-secrets
+    description: Read a contract's key in memory (smoke tests, rotation verification).
+    roles: [Key Vault Secrets User]
+    scope: The Key Vault, which must also be reachable on the network.
+  - id: read-usage-cosmos
+    description: Usage and cost reports from the Cosmos DB usage database.
+    roles: [Cosmos DB Built-in Data Reader]
+    scope: The Cosmos DB account (a data-plane role assigned with az cosmosdb sql role assignment), which must be reachable on the network.
+  - id: read-logs
+    description: Gateway logs, metrics and alert events.
+    roles: [Log Analytics Reader, Monitoring Reader]
+    scope: The Log Analytics workspace and Application Insights component.

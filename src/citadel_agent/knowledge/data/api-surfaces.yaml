@@ -1,0 +1,94 @@
+# API surfaces of a Citadel gateway (how clients call models). ``verified: live`` entries were
+# exercised against a deployed hub at the pinned upstream commit.
+version: 1
+surfaces:
+  - id: unified-ai
+    name: Unified AI API (recommended)
+    apimApiId: unified-ai-api
+    basePath: /unified-ai
+    recommended: true
+    modelLocation: Request body (`model`) on the OpenAI-compatible `/v1` paths; the URL on deployment and native paths.
+    auth: "`api-key` header with the product subscription key (always). Add `Authorization: Bearer <token>` when the contract requires JWT."
+    operations:
+      - {method: POST, path: /unified-ai/v1/chat/completions, purpose: Chat completions (OpenAI-compatible)}
+      - {method: POST, path: /unified-ai/v1/responses, purpose: Responses API (stateful; prefer chat completions with pooled backends)}
+      - {method: POST, path: /unified-ai/v1/embeddings, purpose: Embeddings}
+      - {method: POST, path: /unified-ai/v1/images/generations, purpose: Image generation}
+      - {method: POST, path: /unified-ai/v1/images/edits, purpose: Image edits (multipart; name the model in the x-ai-model header)}
+      - {method: POST, path: "/unified-ai/openai/deployments/{model}/chat/completions?api-version=<version>", purpose: Azure OpenAI-style call}
+      - {method: POST, path: "/unified-ai/bedrock/model/{model}/converse", purpose: Amazon Bedrock native}
+      - {method: POST, path: "/unified-ai/gemini/v1beta/models/{model}:generateContent", purpose: Gemini native}
+      - {method: POST, path: /unified-ai/claude/v1/messages, purpose: Anthropic Claude native}
+      - {method: GET, path: /unified-ai/deployments, purpose: List the models this subscription may use (filtered by the product's allowedModels)}
+      - {method: GET, path: "/unified-ai/deployments/{model}", purpose: Describe one model (404 DeploymentNotFound when unknown)}
+    unsupported:
+      - "`GET /unified-ai/v1/models` (the OpenAI SDK's `models.list()`) returns 500 at the pinned version; use `GET /unified-ai/deployments`."
+    sdkBaseUrl: "{gateway}/unified-ai/v1"
+    evidence:
+      - {file: bicep/infra/modules/apim/unified-ai-api.bicep, contains: "path: 'unified-ai'"}
+    docs:
+      - guides/llm-access-guide.md#unified-ai-api--unified-ai--recommended
+      - guides/llm-access-guide.md#unified-ai-deployment-discovery
+    verified: live
+
+  - id: universal-llm
+    name: Universal LLM API
+    apimApiId: universal-llm-api
+    basePath: /models
+    recommended: false
+    modelLocation: Request body (`model`).
+    auth: "`api-key` header (always), plus a bearer token when the contract requires JWT."
+    operations:
+      - {method: POST, path: /models/chat/completions, purpose: Chat completions (OpenAI v1 specification)}
+      - {method: POST, path: /models/embeddings, purpose: Embeddings}
+      - {method: GET, path: /models/deployments, purpose: List models}
+      - {method: GET, path: /models/models, purpose: List models (OpenAI format)}
+    sdkBaseUrl: "{gateway}/models"
+    evidence:
+      - {file: bicep/infra/modules/apim/apim.bicep, contains: "name: 'universal-llm-api'"}
+    docs: [guides/llm-access-guide.md#universal-llm-api--models]
+    verified: live
+
+  - id: azure-openai
+    name: Azure OpenAI API (legacy)
+    apimApiId: azure-openai-api
+    basePath: /openai
+    recommended: false
+    modelLocation: URL path (`/openai/deployments/{model}/...`) with an `api-version` query parameter.
+    auth: "`api-key` header (always), plus a bearer token when the contract requires JWT."
+    operations:
+      - {method: POST, path: "/openai/deployments/{model}/chat/completions?api-version=<version>", purpose: Chat completions for existing Azure OpenAI SDK clients}
+    sdkBaseUrl: "{gateway}"
+    notes:
+      - Use for applications already written against the Azure OpenAI SDK (`AzureOpenAI(azure_endpoint=<gateway>, ...)`).
+    evidence:
+      - {file: bicep/infra/modules/apim/apim.bicep, contains: "name: 'azure-openai-api'"}
+    docs: [guides/llm-access-guide.md#azure-openai-api--openaideploymentsdeployment-id]
+    verified: source
+
+  - id: realtime
+    name: OpenAI Realtime (WebSocket)
+    apimApiId: openai-realtime-ws-api
+    basePath: /openai/realtime
+    recommended: false
+    modelLocation: Query string (`deployment`).
+    auth: "`api-key` header or query parameter."
+    operations:
+      - {method: WSS, path: "/openai/realtime?api-version=<version>&deployment={model}", purpose: Realtime audio and text}
+    evidence:
+      - {file: bicep/infra/modules/apim/apim.bicep, contains: "name: 'openai-realtime-ws-api'"}
+    verified: source
+
+  - id: version
+    name: Release version API
+    apimApiId: release-version-api
+    basePath: /version
+    recommended: false
+    modelLocation: Not applicable.
+    auth: None required for the version endpoints.
+    operations:
+      - {method: GET, path: /version, purpose: Release tracks of the deployed gateway}
+      - {method: GET, path: /version/backend-contract, purpose: Live backend contract (secrets redacted)}
+    evidence:
+      - {file: bicep/infra/modules/apim/apim.bicep, contains: "name: 'release-version-api'"}
+    verified: live

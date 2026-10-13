@@ -1,0 +1,10 @@
+* @contoso/citadel-platform-operators
+
+# Admin policy, workflows and the pinned upstream are owned by platform admins.
+/.citadel/admin-policy.yaml @contoso/citadel-platform-admins
+/.github/ @contoso/citadel-platform-admins
+/upstream/ @contoso/citadel-platform-admins
+/.gitmodules @contoso/citadel-platform-admins
+
+# The single backend contract per environment is owned by platform operators.
+/contracts/backend/ @contoso/citadel-platform-operators

@@ -1,0 +1,96 @@
+# Citadel Agent admin policy (example).
+#
+# Commit this file to the canonical contracts repository at .citadel/admin-policy.yaml and protect it
+# with CODEOWNERS and branch protection. The agent only reads the committed version on the base
+# branch; local edits are ignored. If the policy is missing or invalid, the agent stays read-only.
+version: 1
+defaultEnvironment: dev
+
+environments:
+  dev:
+    class: dev                # dev | test | prod (prod always uses pull requests)
+    mode: direct              # direct (deploy after approval, then record in the repo) | pr
+    fallbackToPr: true        # open a PR when the caller cannot deploy directly
+    directRecording: auto-pr  # how direct deployments are recorded: auto-pr | env-branch
+    subscriptionId: 00000000-0000-0000-0000-000000000000
+    location: swedencentral
+    tenantId: 00000000-0000-0000-0000-000000000000
+    apim:
+      subscriptionId: 00000000-0000-0000-0000-000000000000
+      resourceGroupName: rg-citadel-dev
+      name: apim-citadel-dev
+    gatewayUrl: https://apim-citadel-dev.azure-api.net
+    apimManagedIdentity:
+      subscriptionId: 00000000-0000-0000-0000-000000000000
+      resourceGroupName: rg-citadel-dev
+      name: id-apim-citadel-dev
+      clientId: 00000000-0000-0000-0000-000000000000
+    keyVault:
+      subscriptionId: 00000000-0000-0000-0000-000000000000
+      resourceGroupName: rg-citadel-dev
+      name: kv-citadel-dev
+    appInsights:
+      subscriptionId: 00000000-0000-0000-0000-000000000000
+      resourceGroupName: rg-citadel-dev
+      name: appi-apim-citadel-dev
+    logAnalyticsWorkspaceId: 00000000-0000-0000-0000-000000000000
+    cosmos:
+      accountName: cosmos-citadel-dev
+    caps:
+      maxTokensPerMinute: 50000
+      maxMonthlyTokenQuota: 50000000
+      allowedModels: []                 # empty: any model onboarded to the gateway
+      allowedServiceCodes: [LLM, TOOL, AGENT, MULTI]
+      allowDirectOutputCredentials: false
+      allowResponseHeaders: true
+    allowPrerequisiteActions: false
+
+  prod:
+    class: prod
+    mode: pr
+    subscriptionId: 00000000-0000-0000-0000-000000000000
+    location: swedencentral
+    apim:
+      subscriptionId: 00000000-0000-0000-0000-000000000000
+      resourceGroupName: rg-citadel-prod
+      name: apim-citadel-prod
+    gatewayUrl: https://apim-citadel-prod.azure-api.net
+    keyVault:
+      subscriptionId: 00000000-0000-0000-0000-000000000000
+      resourceGroupName: rg-citadel-prod
+      name: kv-citadel-prod
+    caps:
+      maxTokensPerMinute: 20000
+      allowResponseHeaders: false
+
+operations:
+  consumer:
+    - gateway.read
+    - models.read
+    - codegen
+    - troubleshoot
+    - smoke-test
+    - usage.read.own
+    - contracts.read.own
+    - docs
+    - access.write
+    - rotation.write
+    - alerts.write
+  operator: ["*"]
+
+personas:
+  operatorRequiresApimWrite: true   # operator persona = effective write permission on the APIM instance
+  operatorGroupObjectIds: []        # or membership in one of these Microsoft Entra groups
+
+gitops:
+  provider: github
+  repository: contoso/citadel-contracts
+  baseBranch: main
+  upstreamPath: upstream/ai-hub-gateway
+  reviewers: []
+  labels: [citadel-agent]
+
+agent:
+  environment: dev
+  model: gpt-5.2
+  gatewayKeySecretName: CITADEL-AGENT-LLM-KEY

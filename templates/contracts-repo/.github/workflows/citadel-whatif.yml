@@ -1,0 +1,75 @@
+# Privileged what-if preview for a pull request.
+#
+# Trust model:
+#   * pull_request_target runs THIS workflow definition from the protected base branch, never the
+#     pull request's copy, so a pull request cannot change what runs with credentials.
+#   * Only contract data (contracts/ and .citadel/changesets/) is taken from the pull request; the
+#     upstream templates come from the base branch's pinned submodule.
+#   * A maintainer must add the "whatif" label, and the "citadel-whatif" environment requires an
+#     approval before the OIDC identity (Reader + deployments/whatIf only) can be used.
+name: citadel-whatif
+
+on:
+  pull_request_target:
+    types: [labeled]
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  whatif:
+    if: github.event.label.name == 'whatif'
+    runs-on: ubuntu-latest
+    environment: citadel-whatif
+    steps:
+      - name: Check out the trusted base branch with the pinned upstream submodule
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Take only contract data from the pull request
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "${{ github.event.pull_request.head.sha }}" --depth=1
+          git checkout "${{ github.event.pull_request.head.sha }}" -- contracts .citadel/changesets || true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Install the Citadel Agent
+        shell: bash
+        env:
+          CITADEL_AGENT_PACKAGE: ${{ vars.CITADEL_AGENT_PACKAGE }}
+        run: |
+          if [ -z "$CITADEL_AGENT_PACKAGE" ]; then
+            echo "::error::Set the repository variable CITADEL_AGENT_PACKAGE to the pinned Citadel Agent package, for example git+https://github.com/<org>/<agent-repository>@<commit>."
+            exit 1
+          fi
+          uv tool install "$CITADEL_AGENT_PACKAGE"
+
+      - name: Validate before using credentials
+        shell: bash
+        run: citadel-agent contracts validate --repo . --base "${{ github.event.pull_request.base.sha }}"
+
+      - name: Sign in to Azure with OpenID Connect (what-if identity)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_WHATIF_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Preview the changes
+        shell: bash
+        env:
+          CITADEL_AGENT_CREDENTIAL: cli
+        run: |
+          set -euo pipefail
+          for manifest in $(git diff --name-only "${{ github.event.pull_request.base.sha }}" -- .citadel/changesets/ || true); do
+            citadel-agent contracts whatif --repo . --manifest "$manifest" >> "$GITHUB_STEP_SUMMARY"
+          done

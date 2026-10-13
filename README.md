@@ -1,0 +1,166 @@
+---
+title: Citadel Agent
+description: AI assistant that helps application teams and platform operators use and operate the Citadel Governance Hub AI gateway through its contract-driven Bicep framework
+---
+
+## Overview
+
+Citadel Agent is a Python application built on Microsoft Agent Framework. It helps people with little Azure API Management experience use the [Citadel Governance Hub](https://github.com/Azure-Samples/ai-hub-gateway-solution-accelerator/tree/citadel-v1) for their AI workloads, and helps platform teams operate it.
+
+Citadel manages the gateway through version-controlled contracts (`.bicepparam` files):
+
+* Backend contracts onboard LLM backends and models
+* Access contracts onboard use cases with products, subscriptions and policies
+* Publish contracts expose MCP tools and A2A agents
+
+The agent always deploys through these upstream contracts. It never re-implements the infrastructure as code.
+
+> [!NOTE]
+> The project is in early development. The current build provides the contract engine, the setup commands and a conversational agent with documentation search, gateway overview and the prepare-and-approve change flow. Tools for drafting contracts, troubleshooting, usage and the other capabilities are in progress.
+
+## Prerequisites
+
+* [uv](https://docs.astral.sh/uv/) (Python 3.11 is downloaded automatically)
+* Git
+* Azure CLI with Bicep (`az bicep install`) for contract validation and deployments
+* Azure Developer CLI (`azd`) for deploying a Citadel environment
+
+## Getting started
+
+Clone the repository with its pinned upstream submodule and install the dependencies:
+
+```bash
+git clone --recurse-submodules <this-repository-url>
+cd AI-Gateway-Accelerator-Agent
+uv sync --all-extras
+```
+
+> [!TIP]
+> If your network reaches PyPI through a package proxy, create a local `uv.toml` (ignored by git) in the repository root:
+>
+> ```toml
+> [[index]]
+> url = "https://<your-package-proxy>/pypi/simple/"
+> default = true
+> ```
+
+Check the installation:
+
+```bash
+uv run citadel-agent version
+uv run citadel-agent upstream status
+```
+
+## Set up an environment
+
+The agent works with an existing Citadel hub and a canonical contracts repository. The repository holds the contracts and the admin policy that decides, per environment, whether changes deploy directly (dev and test only) or through pull requests.
+
+1. Sign in with `az login`.
+2. Describe the hub for the admin policy. The command prints an `environments` entry built from the resources in the hub's resource group:
+
+   ```bash
+   uv run citadel-agent env discover --subscription <subscription-id> --resource-group <hub-resource-group>
+   ```
+
+3. Copy `config/admin-policy.example.yaml`, then paste the discovered environment into it.
+4. Create the canonical contracts repository. It is pinned to the same upstream commit as the agent:
+
+   ```bash
+   uv run citadel-agent repo init --path ../citadel-contracts --policy admin-policy.yaml
+   ```
+
+5. Push the repository to your git host, then point the agent at it in a `.env` file (ignored by git):
+
+   ```text
+   CITADEL_AGENT_REPO_URL=https://github.com/<org>/citadel-contracts.git
+   ```
+
+   For local-only development, set `CITADEL_AGENT_REPO_URL` to the repository's folder instead.
+6. Check the setup. `doctor` reports your derived persona, the policy source, gateway compatibility and whether you can deploy directly:
+
+   ```bash
+   uv run citadel-agent doctor
+   ```
+
+7. Create the agent's own access contract, so the agent calls its model through the gateway, then verify tool calling and streaming:
+
+   ```bash
+   uv run citadel-agent bootstrap
+   uv run citadel-agent llm-check
+   ```
+
+8. Start a conversation, or open the Agent Framework DevUI in a browser:
+
+   ```bash
+   uv run citadel-agent chat
+   uv run citadel-agent devui
+   ```
+
+   `chat` keeps conversations under `.citadel-agent/sessions`; continue one with `--resume <session-id>`. Changes always need your approval: the prompt shows the stored change set, not the model's description of it. `devui` prints an access token that the DevUI asks for, because the agent can deploy changes.
+
+The agent never edits your working copy of the contracts repository. It keeps its own clone under `.citadel-agent/repo` and records every change there first:
+
+* For a hosted repository, the agent opens a pull request. Changes already deployed directly carry the `deployed-directly` label.
+* For a local repository, a directly deployed change fast-forwards its `main` branch. `repo init` configures the repository to accept this. Git refuses the update while the repository has uncommitted changes, and the agent then reports where the change is.
+
+### Settings
+
+| Variable                         | Purpose                                                                  |
+|----------------------------------|--------------------------------------------------------------------------|
+| `CITADEL_AGENT_REPO_URL`         | Canonical contracts repository: git URL, or a local path for development |
+| `CITADEL_AGENT_WORKSPACE_DIR`    | The agent's working clone (default `.citadel-agent/repo`)                |
+| `CITADEL_AGENT_BASE_BRANCH`      | Protected base branch of the repository (default `main`)                 |
+| `CITADEL_AGENT_ENVIRONMENT`      | Environment to work with (default: the policy's `defaultEnvironment`)    |
+| `CITADEL_AGENT_MODEL`            | Override the model the agent uses (default: the policy's `agent.model`)  |
+| `CITADEL_AGENT_GATEWAY_KEY`      | Development only: the agent's gateway key instead of Key Vault           |
+| `CITADEL_AGENT_BOOTSTRAP_POLICY` | Development only: a local admin policy for dev-class environments        |
+| `CITADEL_AGENT_OTEL_ENDPOINT`    | OTLP endpoint for OpenTelemetry traces (prompts are never exported)      |
+| `CITADEL_AGENT_OTEL_CONSOLE`     | `true` prints OpenTelemetry spans to the console                         |
+| `GITHUB_TOKEN`                   | Token for opening pull requests on GitHub                                |
+
+### Commands
+
+| Command                            | Purpose                                                           |
+|------------------------------------|-------------------------------------------------------------------|
+| `citadel-agent env discover`       | Print an admin policy environment entry for an existing hub       |
+| `citadel-agent repo init`          | Create a canonical contracts repository from the template         |
+| `citadel-agent doctor`             | Diagnose identity, policy, gateway compatibility and permissions  |
+| `citadel-agent bootstrap`          | Create the agent's own access contract                            |
+| `citadel-agent llm-check`          | Verify the agent's model access through the gateway               |
+| `citadel-agent chat`               | Chat with the agent in the terminal                               |
+| `citadel-agent devui`              | Use the agent in the Agent Framework DevUI (local development)    |
+| `citadel-agent contracts validate` | Validate a contracts repository (used by its pull request checks) |
+| `citadel-agent contracts render`   | Regenerate the generated files of a contract from its intent      |
+| `citadel-agent contracts whatif`   | Preview a change set's deployments                                |
+| `citadel-agent contracts deploy`   | Deploy a merged change set (used by the deploy workflow)          |
+
+## Upstream pin
+
+The agent is built and tested against a specific upstream commit. The commit and the upstream `release.json` version tracks are recorded in `citadel.lock.json`.
+
+| Command                         | Purpose                                                       |
+|---------------------------------|---------------------------------------------------------------|
+| `citadel-agent version`         | Show the agent version and the pinned upstream release tracks |
+| `citadel-agent upstream status` | Confirm the submodule checkout matches `citadel.lock.json`    |
+| `citadel-agent upstream lock`   | Record the checked-out submodule commit in the lock file      |
+
+## Project layout
+
+| Path                      | Contents                                                      |
+|---------------------------|---------------------------------------------------------------|
+| `src/citadel_agent/`      | Agent source code                                             |
+| `upstream/ai-hub-gateway` | Pinned upstream Citadel repository (git submodule, read-only) |
+| `citadel.lock.json`       | Pinned upstream commit and release tracks                     |
+| `config/`                 | Example admin policy                                          |
+| `tests/`                  | Unit tests                                                    |
+| `skills/`                 | Agent Skills playbooks                                        |
+| `templates/`              | Template for the canonical contracts repository               |
+| `docs/`                   | User, admin and operations documentation                      |
+
+## Development
+
+```bash
+uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+```

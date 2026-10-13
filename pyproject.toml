@@ -1,0 +1,71 @@
+[project]
+name = "citadel-agent"
+version = "0.1.0"
+description = "AI agent that helps teams use and operate the Citadel Governance Hub (Azure API Management AI gateway) through its contract-driven Bicep framework."
+readme = "README.md"
+authors = [
+    { name = "Akhil Thomas", email = "akhilthomas011@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "agent-framework-core>=1.19.0",
+    "agent-framework-openai>=1.14.4",
+    "azure-cosmos>=4.17.1",
+    "azure-identity>=1.26.0",
+    "azure-keyvault-secrets>=4.11.3",
+    "azure-mgmt-apimanagement>=5.0.0",
+    "azure-mgmt-resource-deployments>=2.0.0",
+    "azure-monitor-query>=2.0.0",
+    "defusedxml>=0.7.1",
+    "githubkit>=0.16.1",
+    "httpx>=0.28.1",
+    "pydantic>=2.13.5",
+    "pydantic-settings>=2.15.0",
+    "pyyaml>=6.0.3",
+    "rich>=15.0.0",
+    "typer>=0.27.2",
+]
+
+[project.scripts]
+citadel-agent = "citadel_agent:main"
+
+[project.optional-dependencies]
+devui = [
+    "agent-framework-devui>=1.0.0b260918",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.4.0",
+    "ipywidgets>=8.1.9",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.23.1",
+    "ruff>=0.16.9",
+    "tqdm>=4.70.1",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["upstream"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S108"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_mode = "auto"
+markers = [
+    "az: requires the Azure CLI and Bicep CLI on PATH",
+    "integration: requires a deployed Citadel environment",
+]

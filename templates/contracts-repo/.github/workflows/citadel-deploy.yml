@@ -1,0 +1,89 @@
+# Deploy merged contract changes, in change-set order, per environment.
+#
+# Only the reviewed merge commit is deployed. Each environment (citadel-dev, citadel-test,
+# citadel-prod) is a GitHub environment with its own OIDC identity and required reviewers.
+name: citadel-deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".citadel/changesets/**"
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      manifests: ${{ steps.find.outputs.manifests }}
+    steps:
+      - name: Check out the merge commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Find change sets added by this merge (skip ones already deployed directly)
+        id: find
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=$(git diff --name-only --diff-filter=A HEAD~1 HEAD -- .citadel/changesets/ || true)
+          python3 - "$files" >> "$GITHUB_OUTPUT" <<'PY'
+          import json, sys
+          entries = []
+          for path in sys.argv[1].split():
+              manifest = json.load(open(path, encoding="utf-8"))
+              if manifest.get("executedBy") != "direct":
+                  entries.append({"manifest": path, "environment": manifest["environment"]})
+          print("manifests=" + json.dumps(entries))
+          PY
+
+  deploy:
+    needs: plan
+    if: needs.plan.outputs.manifests != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.manifests) }}
+    environment: citadel-${{ matrix.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the merge commit with the pinned upstream submodule
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Install the Citadel Agent
+        shell: bash
+        env:
+          CITADEL_AGENT_PACKAGE: ${{ vars.CITADEL_AGENT_PACKAGE }}
+        run: |
+          if [ -z "$CITADEL_AGENT_PACKAGE" ]; then
+            echo "::error::Set the repository variable CITADEL_AGENT_PACKAGE to the pinned Citadel Agent package, for example git+https://github.com/<org>/<agent-repository>@<commit>."
+            exit 1
+          fi
+          uv tool install "$CITADEL_AGENT_PACKAGE"
+
+      - name: Sign in to Azure with OpenID Connect (deployment identity for this environment)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy the change set (what-if, then deploy each step in order)
+        shell: bash
+        env:
+          CITADEL_AGENT_CREDENTIAL: cli
+        run: citadel-agent contracts deploy --repo . --manifest "${{ matrix.manifest }}"

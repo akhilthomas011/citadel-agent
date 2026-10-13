@@ -1,0 +1,26 @@
+# Naming conventions that Citadel's contracts derive (verified against the pinned templates).
+version: 1
+names:
+  - id: product
+    pattern: "{code}-{businessUnit}-{useCase}-{ENV}"
+    example: LLM-HR-Chat-DEV
+    notes: Changing any part (including the service code) creates a new product and a new key.
+  - id: subscription
+    pattern: "{product}-SUB-01"
+    example: LLM-HR-Chat-DEV-SUB-01
+  - id: key-vault-secret
+    pattern: "keySecretName lowercased, with _ replaced by -"
+    example: "HR-CHAT-KEY becomes hr-chat-key"
+  - id: foundry-connection
+    pattern: "{prefix}{businessUnit}-{useCase}-{ENV}-{code}"
+    example: Hub-HR-Chat-DEV-LLM
+    notes: The default prefix is Hub-.
+  - id: deployment
+    pattern: "Nested deployment names must be 64 characters or fewer."
+    example: onboard-LLM-HR-Chat-DEV
+  - id: alert-rule
+    pattern: "{namePrefix}-{rule}-alert"
+    example: aigw-hr-chat-throttling-alert
+  - id: backend-pool
+    pattern: "Model name with dots removed, then -{backendType}-backend-pool"
+    example: "gpt-5.2 becomes gpt-52-ai-foundry-backend-pool"

@@ -1,0 +1,5 @@
+[submodule "upstream/ai-hub-gateway"]
+	path = upstream/ai-hub-gateway
+	url = https://github.com/Azure-Samples/ai-hub-gateway-solution-accelerator.git
+	branch = citadel-v1
+	shallow = true
