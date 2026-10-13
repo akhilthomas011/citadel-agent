@@ -5,8 +5,10 @@
 #     pull request's copy, so a pull request cannot change what runs with credentials.
 #   * Only contract data (contracts/ and .citadel/changesets/) is taken from the pull request; the
 #     upstream templates come from the base branch's pinned submodule.
-#   * A maintainer must add the "whatif" label, and the "citadel-whatif" environment requires an
-#     approval before the OIDC identity (Reader + deployments/whatIf only) can be used.
+#   * A maintainer must add the "whatif" label, and the "citadel-whatif" environment should require an
+#     approval before the OIDC identity can be used. ARM what-if checks the same write permissions as a
+#     real deployment, so this identity needs the deployment roles on the target resource group; it
+#     never deploys, and the label plus the trusted base-branch workflow are what keep it safe.
 name: citadel-whatif
 
 on:

@@ -62,6 +62,15 @@ def file_hash(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _without_generator(node: Any) -> Any:
+    """Drop Bicep's ``_generator`` metadata (compiler version and its own hash) from a template."""
+    if isinstance(node, dict):
+        return {key: _without_generator(value) for key, value in node.items() if key != "_generator"}
+    if isinstance(node, list):
+        return [_without_generator(item) for item in node]
+    return node
+
+
 @dataclass(frozen=True)
 class CompiledDeployment:
     """A compiled ARM template with its parameter values, ready for what-if or deployment."""
@@ -74,7 +83,9 @@ class CompiledDeployment:
 
     @property
     def template_hash(self) -> str:
-        return canonical_hash(self.template)
+        # The compiler version must not change the hash, or a change prepared with one Bicep
+        # version could never be deployed from a pipeline that has another.
+        return canonical_hash(_without_generator(self.template))
 
     @property
     def parameters_hash(self) -> str:

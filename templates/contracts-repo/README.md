@@ -35,10 +35,11 @@ Each contract folder contains `contract.yaml` (the intent, edited by people or t
 3. Complete `.citadel/admin-policy.yaml` with your environments and commit it.
 4. Replace the team names in `.github/CODEOWNERS` and protect the `main` branch: require pull requests, CODEOWNERS review and the `citadel-validate` check.
 5. Create GitHub environments `citadel-whatif` and `citadel-<env>` for each environment, with required reviewers.
-6. Create one Microsoft Entra workload identity per GitHub environment with federated credentials for this repository, and grant least privilege:
-   * The what-if identity needs `Reader` plus `Microsoft.Resources/deployments/whatIf/action`
-   * Deployment identities need the roles the contract templates require (API Management Service Contributor on the APIM resource group, Key Vault Secrets Officer on the target Key Vault, Contributor on Foundry resource groups when Foundry connections are used)
-7. Set repository variables `CITADEL_AGENT_PACKAGE` (a pinned `git+https://...@<tag>` reference to the agent), `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` and `AZURE_WHATIF_CLIENT_ID`, and the environment variable `AZURE_CLIENT_ID` in each `citadel-<env>` environment.
+6. Create one Microsoft Entra workload identity per GitHub environment with federated credentials for this repository. GitHub can issue subjects that include immutable owner and repository IDs, so copy the subject from the first failed sign-in error (`AADSTS700213`) if the credential does not match. Grant least privilege on the hub's resource group, not the subscription:
+   * Deployment identities need a custom role limited to `Microsoft.Resources/deployments/*` (subscription scope, no resource access), API Management Service Contributor and Monitoring Contributor on the resource group, and Key Vault Contributor plus Key Vault Secrets Officer on the target Key Vault (Contributor on Foundry resource groups when Foundry connections are used)
+   * The what-if identity needs the same roles, because ARM what-if checks the same write permissions as a deployment. It never deploys, so protect it with the `whatif` label and required environment reviewers
+   * Entra can take a few minutes to propagate a new federated credential; retry a failed first sign-in
+7. Set repository variables `CITADEL_AGENT_PACKAGE` (a pinned `git+https://...@<commit>` reference to the agent), `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` and `AZURE_WHATIF_CLIENT_ID`, and the environment variable `AZURE_CLIENT_ID` in each `citadel-<env>` environment.
 
 ## Workflows
 
