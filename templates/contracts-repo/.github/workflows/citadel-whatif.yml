@@ -34,10 +34,15 @@ jobs:
 
       - name: Take only contract data from the pull request
         shell: bash
+        env:
+          # Read-only token (contents: read), used for this one fetch because credentials are not persisted.
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          git fetch origin "${{ github.event.pull_request.head.sha }}" --depth=1
-          git checkout "${{ github.event.pull_request.head.sha }}" -- contracts .citadel/changesets || true
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" fetch origin "$HEAD_SHA" --depth=1
+          git checkout "$HEAD_SHA" -- contracts .citadel/changesets
 
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
@@ -70,6 +75,12 @@ jobs:
           CITADEL_AGENT_CREDENTIAL: cli
         run: |
           set -euo pipefail
-          for manifest in $(git diff --name-only "${{ github.event.pull_request.base.sha }}" -- .citadel/changesets/ || true); do
-            citadel-agent contracts whatif --repo . --manifest "$manifest" >> "$GITHUB_STEP_SUMMARY"
+          manifests=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" -- .citadel/changesets/)
+          if [ -z "$manifests" ]; then
+            echo "::error::This pull request contains no change set to preview."
+            exit 1
+          fi
+          for manifest in $manifests; do
+            echo "Previewing $manifest"
+            citadel-agent contracts whatif --repo . --manifest "$manifest" | tee -a "$GITHUB_STEP_SUMMARY"
           done

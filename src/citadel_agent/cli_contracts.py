@@ -103,6 +103,7 @@ def whatif(repo: RepoOption = Path("."), manifest: ManifestOption = Path()) -> N
     """Preview a change set's deploy steps (prints a Markdown summary)."""
     change = _load_manifest(repo, manifest)
     console.print(f"### What-if for change set `{change.id}` ({change.environment})\n")
+    failed: list[str] = []
     for step in change.ordered_steps():
         if step.kind is not StepKind.DEPLOY:
             console.print(f"* `{step.id}`: manual prerequisite: {step.description}")
@@ -113,6 +114,9 @@ def whatif(repo: RepoOption = Path("."), manifest: ManifestOption = Path()) -> N
         )
         report = _runner(step.subscription_id or "").what_if(target, step.deployment_name or "", compiled)
         counts = ", ".join(f"{k} {v}" for k, v in sorted(report.counts().items())) or "no changes"
+        if report.error:
+            counts = "what-if failed"
+            failed.append(step.id)
         console.print(f"* `{step.id}` ({step.parameters_file}): {counts}")
         catalogs = load_catalogs()
         created = [c.resource_id for c in report.changes if c.change_type == "Create" and not c.potential]
@@ -130,6 +134,9 @@ def whatif(repo: RepoOption = Path("."), manifest: ManifestOption = Path()) -> N
             console.print(f"  * note: {diagnostic}")
         if report.error:
             console.print(f"  * error: {report.error}")
+    if failed:
+        err_console.print(f"[red]What-if failed for: {', '.join(failed)}[/red]")
+        raise typer.Exit(1)
 
 
 @contracts_app.command("deploy")
@@ -152,6 +159,9 @@ def deploy(repo: RepoOption = Path("."), manifest: ManifestOption = Path()) -> N
         )
         runner = _runner(step.subscription_id or "")
         report = runner.what_if(target, step.deployment_name or "", compiled)
+        if report.error:
+            err_console.print(f"[red]{step.id}: what-if failed, not deploying: {report.error}[/red]")
+            raise typer.Exit(1)
         console.print(f"{step.id}: what-if {report.counts()}")
         record = runner.deploy(target, step.deployment_name or "", compiled)
         if not record.succeeded:
