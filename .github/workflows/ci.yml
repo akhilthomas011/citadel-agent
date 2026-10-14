@@ -45,6 +45,7 @@ jobs:
         run: uv sync --all-extras --python ${{ matrix.python }}
 
       - name: Show the tool versions the tests depend on
+        shell: bash
         run: |
           uv run python --version
           bicep --version
