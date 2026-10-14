@@ -183,6 +183,10 @@ def main() -> None:
     """Console-script entry point."""
     try:
         app()
+    except ProjectRootNotFoundError as exc:
+        # Commands that need the pinned upstream, skills and templates run only from a checkout.
+        err_console.print(f"[red]Error:[/red] {exc}")
+        sys.exit(EXIT_CONFIG_ERROR)
     except KeyboardInterrupt:
         err_console.print("Interrupted by user.")
         sys.exit(130)

@@ -1,0 +1,80 @@
+# Refresh uv.lock on a clean network and open a pull request with the result.
+#
+# A committed lock file makes installs reproducible, including the privileged deploy job of the
+# contracts repository. Developers behind a package proxy cannot always generate one that points at
+# the public index, so this workflow does it on a GitHub-hosted runner. It never merges anything:
+# review the pull request, then merge it.
+#
+# Repository setting required: Settings > Actions > General > "Allow GitHub Actions to create and
+# approve pull requests".
+name: refresh-lock
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 5 1 * *" # First day of each month, 05:41 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refresh-lock
+  cancel-in-progress: false
+
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BASE: ${{ github.event.repository.default_branch }}
+    steps:
+      - name: Check out the agent
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Resolve the dependencies against the public index
+        run: uv lock --upgrade
+
+      - name: Check the lock before proposing it
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s uv.lock
+          if grep -Eiq 'packagefeedproxy|microsoft\.io|localhost|127\.0\.0\.1' uv.lock; then
+            echo "::error::The lock file points at a private index."
+            exit 1
+          fi
+          grep -q 'sha256:' uv.lock || { echo "::error::The lock file has no hashes."; exit 1; }
+          echo "packages locked: $(grep -c '^name = ' uv.lock)"
+
+      - name: Open a pull request when the lock changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          # uv.lock is git-ignored until the first lock is merged, so test tracked state explicitly.
+          if git ls-files --error-unmatch uv.lock >/dev/null 2>&1 && git diff --quiet -- uv.lock; then
+            echo "uv.lock is already up to date."
+            exit 0
+          fi
+          branch="chore/refresh-lock-$(date -u +%Y%m%d)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add -f uv.lock
+          git commit -m "chore(build): refresh uv.lock"
+          git push --force origin "$branch"
+          if gh pr view "$branch" >/dev/null 2>&1; then
+            echo "The pull request already exists."
+          else
+            gh pr create --base "$BASE" --head "$branch" \
+              --title "chore(build): refresh uv.lock" \
+              --body "Regenerated on a GitHub-hosted runner against the public package index. Review the dependency changes, then merge. Once merged, switch CI to \`uv sync --locked\` so installs are reproducible."
+          fi
