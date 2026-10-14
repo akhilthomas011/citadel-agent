@@ -66,3 +66,8 @@ class CosmosUsageReader:
             if len(results) >= max_items:
                 break
         return results
+
+    def upsert(self, database: str, container: str, item: Mapping[str, Any]) -> None:
+        """Create or replace one document. Only the pricing command uses this; every other caller reads."""
+        client = self._client.get_database_client(database).get_container_client(container)
+        client.upsert_item(dict(item))

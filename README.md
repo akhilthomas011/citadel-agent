@@ -160,6 +160,7 @@ The agent never edits your working copy of the contracts repository. It keeps it
 | [Security model](docs/security.md)                | Trust boundaries, approvals and secret handling            |
 | [Token usage](docs/token-usage.md)                | Tool routing, compaction and measuring input tokens        |
 | [Evaluations](docs/evaluations.md)                | Live behavior checks with a stubbed toolset                |
+| [Validation notebooks](docs/validation.md)        | Running upstream's baseline notebooks and what they found  |
 | [Upstream sync](docs/upstream-sync.md)            | Moving the agent to a newer upstream Citadel commit        |
 | [Troubleshooting](docs/troubleshooting.md)        | Network, permissions, proxies and what-if noise            |
 | [Costs and teardown](docs/costs-and-teardown.md)  | Hub cost, model pricing and removing everything            |

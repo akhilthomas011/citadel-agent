@@ -16,6 +16,7 @@ from citadel_agent import __version__
 from citadel_agent.cli_admin import bootstrap, doctor, env_app, llm_check, repo_app
 from citadel_agent.cli_chat import chat, devui, usage
 from citadel_agent.cli_contracts import contracts_app
+from citadel_agent.cli_pricing import pricing_app
 from citadel_agent.paths import ProjectRootNotFoundError, find_project_root
 from citadel_agent.proc import CommandError
 from citadel_agent.upstream import build_lock, check_lock, read_lock, write_lock
@@ -44,6 +45,7 @@ upstream_app = typer.Typer(
 )
 app.add_typer(upstream_app, name="upstream")
 app.add_typer(contracts_app, name="contracts")
+app.add_typer(pricing_app, name="pricing")
 app.add_typer(env_app, name="env")
 app.add_typer(repo_app, name="repo")
 app.command("bootstrap")(bootstrap)
