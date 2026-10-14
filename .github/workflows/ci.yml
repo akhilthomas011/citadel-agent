@@ -1,0 +1,51 @@
+# Lint and test the agent on every pull request and on pushes to main.
+#
+# No cloud credentials: the live agent evaluations (tests/evals, opt in) and integration tests that
+# need a deployed hub are skipped here. Tests that need the Bicep CLI use the one on the runner.
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out the agent with the pinned upstream submodule
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Install the agent and its development dependencies
+        run: uv sync --all-extras
+
+      - name: Show the tool versions the tests depend on
+        run: |
+          uv run python --version
+          bicep --version
+          az version --query '"azure-cli"' -o tsv
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Test
+        run: uv run pytest -q
