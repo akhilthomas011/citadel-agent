@@ -77,16 +77,27 @@ headers = {
 }
 
 with httpx.Client(timeout=60) as client:
-    init = client.post(url, headers=headers, json={
-        "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {"protocolVersion": "2025-03-26", "capabilities": {},
-                   "clientInfo": {"name": "check", "version": "1"}},
-    })
+    init = client.post(
+        url,
+        headers=headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "check", "version": "1"},
+            },
+        },
+    )
     session = init.headers.get("mcp-session-id")
     if session:
         headers["Mcp-Session-Id"] = session
     client.post(url, headers=headers, json={"jsonrpc": "2.0", "method": "notifications/initialized"})
-    tools = client.post(url, headers=headers, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+    tools = client.post(
+        url, headers=headers, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
+    )
     print(tools.status_code)
 ```
 
