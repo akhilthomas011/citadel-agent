@@ -20,8 +20,17 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    name: test (${{ matrix.os }}, python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.11" }
+          - { os: ubuntu-latest, python: "3.12" }
+          - { os: ubuntu-latest, python: "3.13" }
+          - { os: windows-latest, python: "3.11" }
     steps:
       - name: Check out the agent with the pinned upstream submodule
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,7 +42,7 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Install the agent and its development dependencies
-        run: uv sync --all-extras
+        run: uv sync --all-extras --python ${{ matrix.python }}
 
       - name: Show the tool versions the tests depend on
         run: |
