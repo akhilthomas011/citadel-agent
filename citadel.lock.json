@@ -3,7 +3,7 @@
   "upstream": {
     "repository": "https://github.com/Azure-Samples/ai-hub-gateway-solution-accelerator.git",
     "branch": "citadel-v1",
-    "commit": "23fbc8fe7f2f068de3ed3c80da2344760faac1e6",
+    "commit": "0d7b077209014c8843fcb34a688def87f7d96b6c",
     "path": "upstream/ai-hub-gateway",
     "release": {
       "master-version": "1.0.2",
@@ -15,5 +15,5 @@
       "usage-ingestion-version": "1.1.0"
     }
   },
-  "synced_at": "2026-10-07T10:46:41.729968Z"
+  "synced_at": "2026-10-14T07:57:39.563827Z"
 }
