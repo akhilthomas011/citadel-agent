@@ -26,6 +26,7 @@ from citadel_agent.azure_clients.deployments import (
     DeploymentTarget,
     WhatIfReport,
 )
+from citadel_agent.changes.approval import clean_text
 from citadel_agent.changes.changeset import (
     ChangeSet,
     ChangeStep,
@@ -129,7 +130,7 @@ class PreparedChange:
         lines = [
             f"Change set {self.change.id} ({self.change.mode.upper()} mode, environment "
             f"{self.change.environment}/{self.change.environment_class})",
-            f"Summary: {self.change.summary}",
+            f"Summary: {clean_text(self.change.summary)}",
         ]
         for step in self.change.ordered_steps():
             if step.kind is StepKind.PREREQUISITE:
@@ -466,7 +467,7 @@ class ChangeEngine:
             environment=request.environment,
             environment_class=env.environment_class,
             mode=mode,
-            summary=request.summary,
+            summary=clean_text(request.summary),
             intents=[f"{intent_directory(c.intent)}/contract.yaml" for c in request.changes],
             files={
                 path: ("deleted" if content == "deleted" else _sha256(content))

@@ -39,9 +39,12 @@ def _arguments(value: Any) -> dict[str, Any]:
 def approval_notice(ctx: ToolContext, arguments: dict[str, Any]) -> str:
     """The text shown before an execute_change approval card."""
     text, refuse = describe_approval(ctx, EXECUTE, arguments)
+    # A fenced block keeps indentation (YAML nesting) and stops stored text from forming Markdown.
     parts = [
         "\n\n---\n**Change awaiting your approval** (read from the stored change set, not the model)\n\n",
-        text,
+        "```text\n",
+        text.replace("```", "'''"),
+        "\n```",
     ]
     if refuse:
         parts.append("\n\n**Reject this request.** It does not match a stored change set.")

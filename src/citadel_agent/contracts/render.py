@@ -35,6 +35,24 @@ class RenderError(ValueError):
     """Raised when an intent cannot be rendered for the target environment."""
 
 
+def _merge_extra(params: dict[str, Any], extra: dict[str, object]) -> None:
+    """Add free-form upstream parameters that the renderer does not compute itself.
+
+    ``extraParameters`` exists for upstream parameters the intent schema does not model. It must
+    never replace a parameter the renderer computed: those carry the admin-policy caps (token
+    limits, models, service codes) and the environment's coordinates (subscription, Key Vault), and
+    validation checks the caps on the typed intent, not on the rendered parameters.
+    """
+    clashes = sorted(set(extra) & set(params))
+    if clashes:
+        raise RenderError(
+            "extraParameters cannot override parameters the agent computes: "
+            + ", ".join(clashes)
+            + ". Change the matching intent field instead."
+        )
+    params.update(extra)
+
+
 @dataclass(frozen=True)
 class DeploymentSpec:
     """How a rendered contract is deployed (all Citadel contract templates are subscription scoped)."""
@@ -194,7 +212,7 @@ def _render_access(intent: AccessContractIntent, ctx: RenderContext) -> Rendered
         params["additionalKeyVaults"] = [k.to_param() for k in resiliency.additional_key_vaults]
     if resiliency.additional_foundries:
         params["additionalFoundries"] = [f.to_param() for f in resiliency.additional_foundries]
-    params.update(intent.extra_parameters)
+    _merge_extra(params, intent.extra_parameters)
 
     return _finish(
         intent,
@@ -234,7 +252,7 @@ def _render_backend(intent: BackendContractIntent, ctx: RenderContext) -> Render
     uses_key_vault = any(b.auth_config and b.auth_config.key_vault_secret_uri for b in intent.backends)
     if uses_key_vault and target.key_vault is not None:
         params["keyVaultName"] = target.key_vault.name
-    params.update(intent.extra_parameters)
+    _merge_extra(params, intent.extra_parameters)
     directory = intent_directory(intent)
     template = ctx.layout.backend_contract_template
     return _finish(
@@ -265,7 +283,7 @@ def _render_publish(intent: PublishContractIntent, ctx: RenderContext) -> Render
         params["circuitBreakerDefaults"] = intent.circuit_breaker_defaults.to_param()
     if intent.api_center is not None:
         params["apiCenter"] = intent.api_center.to_param()
-    params.update(intent.extra_parameters)
+    _merge_extra(params, intent.extra_parameters)
     directory = intent_directory(intent)
     template = ctx.layout.publish_contract_template
     name = _slug("citadel-publish", intent.name, intent.environment)
@@ -287,7 +305,7 @@ def _render_alerts(intent: AlertsIntent, ctx: RenderContext) -> RenderedContract
         "alertsEnabled": intent.alerts_enabled,
         "alerts": [a.to_param() for a in intent.alerts],
     }
-    params.update(intent.extra_parameters)
+    _merge_extra(params, intent.extra_parameters)
     directory = intent_directory(intent)
     template = ctx.layout.alerts_template
     name = _slug("citadel-alerts", intent.scope_name, intent.environment)

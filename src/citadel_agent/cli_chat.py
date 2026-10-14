@@ -10,13 +10,16 @@ import logging
 import secrets
 import sys
 import warnings
+from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
+from rich.text import Text
 
+from citadel_agent.changes.approval import approval_details, git_base_reader
 from citadel_agent.changes.engine import PreparedChange
 from citadel_agent.changes.store import ChangeStoreError
 from citadel_agent.settings import Settings
@@ -73,6 +76,17 @@ def parse_arguments(arguments: Any) -> dict[str, Any]:
     return {}
 
 
+def _contract_details(context: ToolContext, change: Any) -> str:
+    """The contract values that change, read from the stored snapshot and the base commit."""
+    try:
+        snapshot = context.runtime.store.snapshot(change.id)
+    except ChangeStoreError:
+        snapshot = {}
+    root = getattr(getattr(context.runtime, "workspace", None), "path", None)
+    read_base = git_base_reader(Path(root), change.repo_base_commit) if root else (lambda _path: None)
+    return approval_details(change.files, snapshot, read_base)
+
+
 def describe_approval(context: ToolContext, name: str, arguments: dict[str, Any]) -> tuple[str, bool]:
     """Text for an approval prompt and whether the request must be refused outright.
 
@@ -88,6 +102,9 @@ def describe_approval(context: ToolContext, name: str, arguments: dict[str, Any]
         return f"Unknown change {change_id!r}: {exc}", True
     expected = change.content_hash()
     summary = PreparedChange(change, expected).summary()
+    details = _contract_details(context, change)
+    if details:
+        summary = f"{summary}\n\n{details}"
     if arguments.get("approval_hash") != expected:
         return f"{summary}\n\nThe approval hash in the request does not match this change set.", True
     action = (
@@ -170,7 +187,7 @@ def chat(
         arguments = parse_arguments(getattr(call, "arguments", None))
         text, refuse = describe_approval(bundle.context, name, arguments)
         console.print(
-            Panel(text, title=f"Approval required: {name}", border_style="red" if refuse else "yellow")
+            Panel(Text(text), title=f"Approval required: {name}", border_style="red" if refuse else "yellow")
         )
         if refuse:
             console.print("[red]Refused automatically.[/red]")

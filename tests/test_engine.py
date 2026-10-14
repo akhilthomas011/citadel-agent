@@ -685,6 +685,112 @@ def test_repository_produced_by_the_engine_validates_and_tampering_is_caught(har
     assert "active rotation transaction" in errors
 
 
+def _pr_repo(seed: Path, tmp_path: Path) -> tuple[Path, Path, dict[str, Any]]:
+    repo = tmp_path / "repo"
+    shutil.copytree(seed, repo)
+    harness = Harness(repo, tmp_path, can_deploy=False)
+    prepared = harness.engine.prepare(request(IntentChange("access", access(), Operation.ACCESS_WRITE)))
+    harness.engine.execute(prepared.change.id, prepared.content_hash)
+    assert _validate(repo) == []
+    path = repo / ".citadel" / "changesets" / f"{prepared.change.id}.json"
+    return repo, path, json.loads(path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "fragment"),
+    [
+        ("parametersFile", ".citadel/changesets/x.bicepparam", "not a generated contracts"),
+        ("parametersFile", "contracts/access/../../../evil/main.bicepparam", "not a generated contracts"),
+        (
+            "parametersFile",
+            "upstream/ai-hub-gateway/bicep/infra/x/main.bicepparam",
+            "not a generated contracts",
+        ),
+        ("template", "contracts/evil/main.bicep", "not an upstream contract template"),
+        ("template", "upstream/ai-hub-gateway/bicep/infra/../../../evil/main.bicep", "not an upstream"),
+        ("subscriptionId", "not-a-guid", "not a GUID"),
+        ("location", "../etc", "plain Azure region"),
+    ],
+)
+def test_a_manifest_step_cannot_point_the_pipeline_at_anything_else(
+    seed: Path, tmp_path: Path, field: str, value: str, fragment: str
+) -> None:
+    repo, path, manifest = _pr_repo(seed, tmp_path)
+    for step in manifest["steps"]:
+        step[field] = value
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert fragment in "\n".join(_validate(repo))
+
+
+def test_a_manifest_step_must_match_what_the_renderer_produces(seed: Path, tmp_path: Path) -> None:
+    repo, path, manifest = _pr_repo(seed, tmp_path)
+    for step in manifest["steps"]:
+        step["subscriptionId"] = "00000000-0000-0000-0000-000000000001"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert "differs from the rendered contract" in "\n".join(_validate(repo))
+
+
+def test_a_manifest_that_describes_no_files_is_still_checked(seed: Path, tmp_path: Path) -> None:
+    repo, path, manifest = _pr_repo(seed, tmp_path)
+    manifest["files"] = {}
+    for step in manifest["steps"]:
+        step["parametersFile"] = "contracts/access/other/uc/dev/main.bicepparam"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert "does not exist" in "\n".join(_validate(repo))
+
+
+def test_an_unknown_environment_in_a_manifest_is_rejected(seed: Path, tmp_path: Path) -> None:
+    repo, path, manifest = _pr_repo(seed, tmp_path)
+    manifest["environment"] = "prod-eu"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert "environment 'prod-eu' is not defined" in "\n".join(_validate(repo))
+
+
+def test_a_historical_manifest_for_a_removed_contract_is_not_an_error(seed: Path, tmp_path: Path) -> None:
+    repo, path, manifest = _pr_repo(seed, tmp_path)
+    # A later change set rewrites every generated file of the contract, so the old one is historical.
+    digests = {
+        name: "sha256:" + hashlib.sha256((repo / Path(*name.split("/"))).read_bytes()).hexdigest()
+        for name in manifest["files"]
+    }
+    newer = {**manifest, "files": digests}
+    (path.parent / "cs-99991231-235959-zzzzzz.json").write_text(json.dumps(newer), encoding="utf-8")
+    for step in manifest["steps"]:
+        step["parametersFile"] = "contracts/access/gone/uc/dev/main.bicepparam"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert [e for e in _validate(repo) if "step " in e] == []
+
+
+@pytest.mark.parametrize(
+    "stray",
+    ["bicepconfig.json", ".citadel/x.bicep", "contracts/evil.bicep", "deploy.bicepparam", "tools/main.bicep"],
+)
+def test_nothing_outside_upstream_may_add_templates_or_bicep_configuration(
+    seed: Path, tmp_path: Path, stray: str
+) -> None:
+    repo, _, _ = _pr_repo(seed, tmp_path)
+    target = repo / Path(*stray.split("/"))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("targetScope = 'subscription'", encoding="utf-8")
+
+    assert f"{stray}: templates are not allowed" in "\n".join(_validate(repo))
+
+
+def test_only_json_manifests_are_allowed_but_a_placeholder_is_fine(seed: Path, tmp_path: Path) -> None:
+    repo, path, _ = _pr_repo(seed, tmp_path)
+    (path.parent / ".gitkeep").write_text("", encoding="utf-8")
+    assert _validate(repo) == []
+
+    (path.parent / "run.sh").write_text("echo hi", encoding="utf-8")
+
+    assert "only .json change-set manifests are allowed" in "\n".join(_validate(repo))
+
+
 def test_pr_manifest_detects_edited_files(seed: Path, tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     shutil.copytree(seed, repo)

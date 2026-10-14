@@ -233,6 +233,34 @@ def test_written_files_use_lf_line_endings(repo: Path, tmp_path: Path) -> None:
 # Golden compiles against the pinned upstream templates ----------------------------------------
 
 
+@pytest.mark.parametrize(
+    "intent_data", [ACCESS, BACKEND, PUBLISH, ALERTS], ids=["access", "backend", "publish", "alerts"]
+)
+def test_extra_parameters_cannot_override_what_the_renderer_computes(
+    repo: Path, intent_data: dict[str, Any]
+) -> None:
+    clean = render_intent(parse_intent(intent_data), context(repo))
+    computed = sorted(
+        name
+        for name in ("apim", "keyVault", "services", "llmBackendConfig", "publishAssets", "alerts")
+        if f"param {name} " in clean.files[clean.deployment.parameters_file]
+    )
+    assert computed, "the fixture must compute at least one parameter"
+
+    for name in computed:
+        hostile = parse_intent({**intent_data, "extraParameters": {name: "attacker-value"}})
+        with pytest.raises(RenderError, match=f"cannot override.*{name}"):
+            render_intent(hostile, context(repo))
+
+
+def test_extra_parameters_may_add_upstream_parameters_the_schema_does_not_model(repo: Path) -> None:
+    intent = parse_intent({**ACCESS, "extraParameters": {"someNewUpstreamFlag": True}})
+
+    rendered = render_intent(intent, context(repo))
+
+    assert "someNewUpstreamFlag" in rendered.files[rendered.deployment.parameters_file]
+
+
 @pytest.mark.az
 @pytest.mark.parametrize(
     "intent_data", [ACCESS, BACKEND, PUBLISH, ALERTS], ids=["access", "backend", "publish", "alerts"]

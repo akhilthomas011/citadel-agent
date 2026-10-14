@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from rich.console import Console
@@ -20,7 +20,7 @@ from citadel_agent.azure_clients.credentials import create_credential
 from citadel_agent.azure_clients.deployments import NO_CHANGE_TYPES, DeploymentRunner, DeploymentTarget
 from citadel_agent.changes.changeset import ChangeSet, StepKind
 from citadel_agent.changes.repository import CanonicalRepository
-from citadel_agent.changes.validation import IssueLevel, validate_repository
+from citadel_agent.changes.validation import IssueLevel, step_problems, validate_repository
 from citadel_agent.contracts.intent_io import load_intent
 from citadel_agent.contracts.render import RenderContext, render_intent
 from citadel_agent.knowledge.catalogs import load_catalogs
@@ -98,6 +98,30 @@ def _runner(subscription_id: str) -> DeploymentRunner:
     return DeploymentRunner(create_credential(), subscription_id)
 
 
+def _step_problems(repo: Path, step: Any) -> list[str]:
+    """Why a manifest step must not run with credentials (see ``step_problems``)."""
+    return step_problems(
+        repo,
+        str(CanonicalRepository(repo).upstream_path),
+        parameters_file=step.parameters_file or "",
+        template=step.template or "",
+        subscription_id=step.subscription_id or "",
+        location=step.location or "",
+    )
+
+
+def _guard_step(repo: Path, step: Any) -> None:
+    """Stop before any compile or deployment when a manifest step is not a generated contract.
+
+    The manifest is data a pull request controls and these commands run with cloud credentials. The
+    deploy workflow does not run ``contracts validate`` first, so the check lives here too.
+    """
+    problems = _step_problems(repo, step)
+    if problems:
+        err_console.print(f"[red]Refusing to run step '{step.id}':[/red]\n  " + "\n  ".join(problems))
+        raise typer.Exit(2)
+
+
 @contracts_app.command("whatif")
 def whatif(repo: RepoOption = Path("."), manifest: ManifestOption = Path()) -> None:
     """Preview a change set's deploy steps (prints a Markdown summary)."""
@@ -108,6 +132,7 @@ def whatif(repo: RepoOption = Path("."), manifest: ManifestOption = Path()) -> N
         if step.kind is not StepKind.DEPLOY:
             console.print(f"* `{step.id}`: manual prerequisite: {step.description}")
             continue
+        _guard_step(repo, step)
         compiled = compile_deployment(repo / Path(*(step.parameters_file or "").split("/")))
         target = DeploymentTarget(
             scope="subscription", subscription_id=step.subscription_id or "", location=step.location
@@ -150,6 +175,7 @@ def deploy(repo: RepoOption = Path("."), manifest: ManifestOption = Path()) -> N
         if step.kind is not StepKind.DEPLOY:
             console.print(f"Skipping manual prerequisite '{step.id}': {step.description}")
             continue
+        _guard_step(repo, step)
         compiled = compile_deployment(repo / Path(*(step.parameters_file or "").split("/")))
         mismatched = [
             f"{label} (prepared {prepared[:19]}, now {current[:19]})"

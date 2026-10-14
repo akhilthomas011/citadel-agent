@@ -23,7 +23,7 @@ Every change follows the same path, and each step narrows what can go wrong:
 
 1. The change is validated against the admin policy caps and the contract schema.
 2. Preparation renders the files, compiles them, scans the compiled parameters for secrets and runs what-if. The result is stored as an immutable change set with content hashes.
-3. Approval shows the stored change set. The model's description of the change is never shown in the approval prompt.
+3. Approval shows the stored change set: the summary, the what-if, and a diff of the contract values that change (owners, allowed models, limits, protections), read from the stored snapshot and compared with the repository base commit. The what-if lists resources and property paths but never values, so the diff is what shows that a change adds an owner or widens the allowed models. Text the model wrote, such as the summary, is reduced to one printable line, so it cannot forge extra lines or hide text with control characters.
 4. Execution re-checks the approval hash, the repository base commit, the admin policy blob, the upstream pins, the live gateway version and the what-if fingerprint. Any drift invalidates the approval.
 5. A change set runs once. A second attempt is refused.
 
@@ -33,7 +33,7 @@ An approval request whose hash does not match the stored change is refused autom
 
 The DevUI approval card shows only the raw call, and it cannot ask for typed confirmation. Two safeguards close those gaps:
 
-* Before every `execute_change` approval card, the DevUI conversation shows the stored change set (summary, what-if, approval hash and what approval will do), read from disk and not from the model. A request that does not match a stored change is flagged with a warning to reject it.
+* Before every `execute_change` approval card, the DevUI conversation shows the stored change set (summary, what-if, the contract diff, approval hash and what approval will do), read from disk and not from the model. A request that does not match a stored change is flagged with a warning to reject it.
 * An irreversible step, regenerating the old key in a rotation, is refused if it is approved in the DevUI, because the typed `ROTATE` confirmation is not possible there. Approve that step in `citadel-agent chat`.
 
 The terminal chat renders the same stored change in its own approval prompt.
@@ -67,6 +67,10 @@ The shipped workflows follow a conservative model:
 
 * Validation runs without credentials.
 * The privileged what-if workflow runs the base branch's definition (`pull_request_target`), takes only contract data from the pull request and needs a maintainer to add a label.
+* A change-set manifest is data that a pull request controls, and the what-if and deploy jobs run with credentials. A manifest step may only deploy a generated `contracts/<kind>/.../main.bicepparam` that uses an upstream template, and for a manifest that can still run, the step must equal what the renderer produces for that contract (template, subscription and location). Validation enforces this, and `contracts whatif` and `contracts deploy` enforce it again before they compile or deploy anything, because the deploy workflow does not run validation first.
+* Nothing outside the pinned upstream may add a template, a Bicep configuration file or a parameter file, and the change-set folder may only hold JSON manifests. A template or parameter file could otherwise be compiled with credentials in the environment.
+* `extraParameters` in a contract can add upstream parameters the schema does not model, but it cannot override a parameter the renderer computes, such as limits, models, service codes or the environment's coordinates. Caps are checked on the typed intent, so an override would otherwise bypass them.
+* The deploy workflow reads change-set file names as NUL-separated data and accepts only the exact pattern the agent writes, and it passes paths to the shell through environment variables, never through the script text. A file name cannot inject a command.
 * Agent pull requests may only change `contracts/` and `.citadel/{changesets,rotations,locks}/`. Changes to the admin policy, the workflows or the upstream pin need a separate review.
 * Actions are pinned by commit SHA.
 * Azure sign-in uses OpenID Connect with a federated credential limited to one repository and environment. No client secrets exist.
@@ -76,6 +80,7 @@ Known limits to plan for:
 
 * The what-if identity needs the same write roles as the deployment identity, because Azure what-if checks write permissions. Protect it with the label and with environment reviewers.
 * GitHub environment reviewers need a plan that supports them. Without them, restrict write access to the contracts repository.
+* The deploy workflow installs the agent with `uv tool install`. Without a lock file, its dependencies resolve to the newest versions at install time, and a compromised release would run with the deployment identity. Commit `uv.lock` (the `refresh-lock` workflow proposes one) and pin the agent to a commit.
 
 ## Agent's own model access
 

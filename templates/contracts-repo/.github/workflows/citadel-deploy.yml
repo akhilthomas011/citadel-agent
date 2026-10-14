@@ -30,14 +30,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          files=$(git diff --name-only --diff-filter=A HEAD~1 HEAD -- .citadel/changesets/ || true)
-          python3 - "$files" >> "$GITHUB_OUTPUT" <<'PY'
-          import json, sys
+          # Names are NUL separated so no character in a file name is ever interpreted by a shell.
+          git diff -z --name-only --diff-filter=A HEAD~1 HEAD -- .citadel/changesets/ > "$RUNNER_TEMP/added.bin"
+          python3 - "$RUNNER_TEMP/added.bin" >> "$GITHUB_OUTPUT" <<'PY'
+          import json, re, sys
+          NAME = re.compile(r"^\.citadel/changesets/cs-[0-9]{8}-[0-9]{6}-[0-9a-f]{6}\.json$")
+          ENVIRONMENT = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
           entries = []
-          for path in sys.argv[1].split():
+          for raw in open(sys.argv[1], "rb").read().split(b"\0"):
+              if not raw:
+                  continue
+              path = raw.decode("utf-8", "replace")
+              if path.endswith(".gitkeep"):
+                  continue
+              if not NAME.match(path):
+                  print(f"::error::Unexpected file in .citadel/changesets/: {path!r}", file=sys.stderr)
+                  sys.exit(1)
               manifest = json.load(open(path, encoding="utf-8"))
+              environment = str(manifest.get("environment", ""))
+              if not ENVIRONMENT.match(environment):
+                  print(f"::error::Invalid environment name in {path}", file=sys.stderr)
+                  sys.exit(1)
               if manifest.get("executedBy") != "direct":
-                  entries.append({"manifest": path, "environment": manifest["environment"]})
+                  entries.append({"manifest": path, "environment": environment})
           print("manifests=" + json.dumps(entries))
           PY
 
@@ -86,4 +101,6 @@ jobs:
         shell: bash
         env:
           CITADEL_AGENT_CREDENTIAL: cli
-        run: citadel-agent contracts deploy --repo . --manifest "${{ matrix.manifest }}"
+          # A path from the repository is passed as data, never spliced into the script text.
+          MANIFEST: ${{ matrix.manifest }}
+        run: citadel-agent contracts deploy --repo . --manifest "$MANIFEST"
