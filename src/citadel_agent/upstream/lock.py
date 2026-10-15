@@ -16,7 +16,12 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from citadel_agent.paths import DEFAULT_UPSTREAM_SUBMODULE, lock_file_path
+from citadel_agent.paths import (
+    DEFAULT_UPSTREAM_SUBMODULE,
+    CheckoutRequiredError,
+    is_bundled_root,
+    lock_file_path,
+)
 from citadel_agent.proc import run_command
 
 RELEASE_FILE_NAME = "release.json"
@@ -87,6 +92,10 @@ def read_lock(root: Path) -> UpstreamLock:
 
 def write_lock(root: Path, lock: UpstreamLock) -> Path:
     """Write ``citadel.lock.json`` to the checkout root and return its path."""
+    if is_bundled_root(root):
+        raise CheckoutRequiredError(
+            "Updating the upstream lock is checkout-only; bundled assets are read-only."
+        )
     path = lock_file_path(root)
     payload = lock.model_dump(mode="json")
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -94,6 +103,10 @@ def write_lock(root: Path, lock: UpstreamLock) -> Path:
 
 
 def _git(cwd: Path, *args: str) -> str:
+    if any(is_bundled_root(parent) for parent in (cwd, *cwd.parents)):
+        raise CheckoutRequiredError(
+            "Upstream git operations are checkout-only; bundled assets are read-only."
+        )
     return run_command("git", args, cwd=cwd).stdout.strip()
 
 

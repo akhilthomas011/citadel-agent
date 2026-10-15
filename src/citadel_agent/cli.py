@@ -17,7 +17,7 @@ from citadel_agent.cli_admin import bootstrap, doctor, env_app, llm_check, repo_
 from citadel_agent.cli_chat import chat, devui, usage
 from citadel_agent.cli_contracts import contracts_app
 from citadel_agent.cli_pricing import pricing_app
-from citadel_agent.paths import ProjectRootNotFoundError, find_project_root
+from citadel_agent.paths import ProjectRootNotFoundError, find_project_root, require_checkout
 from citadel_agent.proc import CommandError
 from citadel_agent.upstream import build_lock, check_lock, read_lock, write_lock
 from citadel_agent.upstream.sync import (
@@ -86,7 +86,7 @@ def version() -> None:
 def upstream_status() -> None:
     """Check that the upstream submodule matches citadel.lock.json."""
     try:
-        status = check_lock(find_project_root())
+        status = check_lock(require_checkout(find_project_root()))
     except (ProjectRootNotFoundError, FileNotFoundError, CommandError) as exc:
         raise _fail(str(exc)) from exc
 
@@ -107,7 +107,7 @@ def upstream_status() -> None:
 def upstream_lock() -> None:
     """Record the checked-out upstream submodule commit and release tracks in citadel.lock.json."""
     try:
-        root = find_project_root()
+        root = require_checkout(find_project_root())
         path = write_lock(root, build_lock(root))
     except (ProjectRootNotFoundError, FileNotFoundError, CommandError) as exc:
         raise _fail(str(exc)) from exc
@@ -137,7 +137,7 @@ def upstream_sync(
     or --apply), 2 configuration error.
     """
     try:
-        root = find_project_root()
+        root = require_checkout(find_project_root())
         result = run_sync(root, ref=ref)
     except (ProjectRootNotFoundError, SyncError) as exc:
         raise _fail(str(exc)) from exc
@@ -184,7 +184,6 @@ def main() -> None:
     try:
         app()
     except ProjectRootNotFoundError as exc:
-        # Commands that need the pinned upstream, skills and templates run only from a checkout.
         err_console.print(f"[red]Error:[/red] {exc}")
         sys.exit(EXIT_CONFIG_ERROR)
     except KeyboardInterrupt:

@@ -38,6 +38,8 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      UV_NO_SYNC: "true"
     permissions:
       contents: read
     outputs:
@@ -63,7 +65,9 @@ jobs:
         run: az bicep install
 
       - name: Install the agent and its development dependencies
-        run: uv sync --all-extras
+        run: |
+          uv sync --locked --all-extras --group build --no-install-project --no-build
+          uv sync --locked --all-extras --group build --no-build-isolation
 
       - name: Evaluate upstream and move the pin when it is compatible
         id: sync
@@ -77,7 +81,7 @@ jobs:
             args+=(--ref "$SYNC_REF")
           fi
           status=0
-          uv run citadel-agent upstream sync "${args[@]}" || status=$?
+          uv run --locked citadel-agent upstream sync "${args[@]}" || status=$?
           # 0 = synced or nothing to do, 1 = blocked (pin not moved), 2 = configuration error.
           if [ "$status" -ge 2 ] || [ ! -f UPSTREAM-COMPAT.md ]; then
             echo "::error::citadel-agent upstream sync failed with exit code $status"
@@ -98,7 +102,7 @@ jobs:
         id: tests
         if: steps.moved.outputs.changed == 'true'
         continue-on-error: true
-        run: uv run pytest -q
+        run: uv run --locked pytest -q
 
       - name: Summarize the result
         id: result

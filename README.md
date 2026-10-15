@@ -15,6 +15,18 @@ Citadel manages the gateway through version-controlled contracts (`.bicepparam` 
 
 The agent always deploys through these upstream contracts. It never re-implements the infrastructure as code.
 
+### Release scope
+
+The v1.0 target is operations for an **existing hub**, not provisioning the
+entire accelerator or supporting every upstream API. See the
+[release notes](CHANGELOG.md) and [security policy](SECURITY.md).
+Container Apps hosting with a UI is planned separately; DevUI is for local
+testing, not a production multi-user frontend. Production deployments require
+enforced repository reviews, environment approvals and Azure identity controls.
+
+The agent is [MIT licensed](LICENSE). Existing source and upstream copyright
+and license notices remain in force.
+
 ## What it can do
 
 Application teams can:
@@ -46,7 +58,8 @@ Clone the repository with its pinned upstream submodule and install the dependen
 ```bash
 git clone --recurse-submodules <this-repository-url>
 cd AI-Gateway-Accelerator-Agent
-uv sync --all-extras
+uv sync --locked --all-extras --group build --no-install-project --no-build
+uv sync --locked --all-extras --group build --no-build-isolation
 ```
 
 > [!TIP]
@@ -64,6 +77,40 @@ Check the installation:
 uv run citadel-agent version
 uv run citadel-agent upstream status
 ```
+
+### Installed package (no checkout at runtime)
+
+Wheels include trusted skills, repository templates, example configuration and
+runtime content from the exact upstream pin, including its license. They do not
+fetch a floating upstream branch at startup. Upstream synchronization is a
+maintainer operation requiring a source checkout; update the installed artifact
+to consume a newer tested pin.
+
+To build and install a reproducible artifact on Windows:
+
+```powershell
+uv sync --locked --all-extras --group build --no-install-project --no-build
+uv sync --locked --all-extras --group build --no-build-isolation
+uv build --no-build-isolation --python .venv\Scripts\python.exe --out-dir build\dist
+uv export --locked --all-extras --no-dev --no-emit-project --output-file build\runtime-requirements.txt
+uv venv build\installed --python 3.11
+uv pip install --python build\installed\Scripts\python.exe --require-hashes -r build\runtime-requirements.txt
+$wheel = (Get-ChildItem build\dist\*.whl).FullName
+uv pip install --python build\installed\Scripts\python.exe --no-deps $wheel
+```
+
+On Linux, virtualenv Python is under `bin/python` rather than `Scripts/python.exe`.
+Use the same lock for dependency installation; installing only the wheel with
+unconstrained dependency resolution is not the reproducible release path.
+
+The installed CLI works from any directory. Configuration comes from environment
+variables or the current directory's `.env`. Set `CITADEL_AGENT_STATE_DIR` to a
+writable persistent location; packaged defaults are `%LOCALAPPDATA%\citadel-agent`
+on Windows and `$XDG_STATE_HOME/citadel-agent` (or `~/.local/state/citadel-agent`)
+on Linux. State must not be written into the installed package. This enables a
+future container deployment, but persistence, user isolation and UI design remain
+separate work. `repo init` still needs Git/network access to clone the exact
+upstream commit into the new contracts repository.
 
 ## Set up an environment
 

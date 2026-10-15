@@ -23,6 +23,9 @@ jobs:
     name: test (${{ matrix.os }}, python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    env:
+      # The preceding locked install owns the environment, including build/devui extras.
+      UV_NO_SYNC: "true"
     strategy:
       fail-fast: false
       matrix:
@@ -41,21 +44,56 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
-      - name: Install the agent and its development dependencies
-        run: uv sync --all-extras --python ${{ matrix.python }}
+      - name: Install locked dependencies and build tools from wheels
+        run: uv sync --locked --all-extras --group build --no-install-project --no-build --python ${{ matrix.python }}
+
+      - name: Install the agent using the locked build environment
+        run: uv sync --locked --all-extras --group build --no-build-isolation --python ${{ matrix.python }}
 
       - name: Show the tool versions the tests depend on
         shell: bash
         run: |
-          uv run python --version
+          uv run --locked python --version
           bicep --version
           az version --query '"azure-cli"' -o tsv
 
       - name: Lint
-        run: uv run ruff check .
+        run: uv run --locked ruff check .
 
       - name: Check formatting
-        run: uv run ruff format --check .
+        run: uv run --locked ruff format --check .
 
       - name: Test
-        run: uv run pytest -q
+        run: uv run --locked pytest -q
+
+      - name: Build using locked build dependencies and verify wheel assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python="$PWD/.venv/bin/python"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python="$PWD/.venv/Scripts/python.exe"
+          fi
+          uv sync --locked --all-extras --group build --no-build-isolation --python "$python"
+          uv build --no-build-isolation --python "$python" --out-dir build/dist
+          "$python" scripts/check_wheel.py build/dist/*.whl
+          uv export --locked --all-extras --no-dev --no-emit-project --output-file build/runtime-requirements.txt
+
+      - name: Smoke-test the installed artifact outside the checkout
+        shell: bash
+        env:
+          TEST_PYTHON: ${{ matrix.python }}
+        run: |
+          set -euo pipefail
+          smoke="$RUNNER_TEMP/citadel-smoke"
+          uv venv "$smoke/venv" --python "$TEST_PYTHON"
+          python="$smoke/venv/bin/python"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python="$smoke/venv/Scripts/python.exe"
+          fi
+          uv pip install --python "$python" --require-hashes -r build/runtime-requirements.txt
+          uv pip install --python "$python" --no-deps build/dist/*.whl
+          script="$PWD/scripts/smoke_installed.py"
+          mkdir -p "$smoke/empty"
+          cd "$smoke/empty"
+          "$python" -I "$script"

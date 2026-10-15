@@ -80,7 +80,22 @@ Known limits to plan for:
 
 * The what-if identity needs the same write roles as the deployment identity, because Azure what-if checks write permissions. Protect it with the label and with environment reviewers.
 * GitHub environment reviewers need a plan that supports them. Without them, restrict write access to the contracts repository.
-* The deploy workflow installs the agent with `uv tool install`. Without a lock file, its dependencies resolve to the newest versions at install time, and a compromised release would run with the deployment identity. Commit `uv.lock` (the `refresh-lock` workflow proposes one) and pin the agent to a commit.
+* The contracts workflows accept only a GitHub HTTPS agent reference pinned to a full commit SHA. Before Azure sign-in, they check out that commit and install runtime/build dependencies from wheels using its committed `uv.lock` and build group. They then install the agent non-editably with build isolation disabled, using those locked build tools. A package pin or exact build-backend version alone does not lock transitive dependencies. Missing wheels fail closed rather than building an unreviewed dependency.
+* Existing contracts repositories must adopt the updated workflows and a lock-bearing agent commit. Merely updating this repository does not secure an older deployed workflow.
+
+### Production readiness
+
+Production requires enforced pull requests, required validation and CODEOWNERS
+reviews, restricted bypass privileges, deployment-environment reviewers and
+environment-scoped OIDC. A `prod` policy setting alone does not establish those
+controls. If the repository plan cannot enforce them, treat that configuration
+as trusted-operator development only.
+
+Changing a private contracts repository to public is a separate disclosure
+decision. Review reachable history, contract ownership/contact information,
+endpoints and infrastructure identifiers before changing visibility. Removing
+data from the latest commit does not remove it from history. Publishing does
+not itself enable branch protection or configure Azure identities.
 
 ## Agent's own model access
 
