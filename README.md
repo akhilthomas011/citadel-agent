@@ -58,7 +58,8 @@ Clone the repository with its pinned upstream submodule and install the dependen
 ```bash
 git clone --recurse-submodules <this-repository-url>
 cd AI-Gateway-Accelerator-Agent
-uv sync --locked --all-extras
+uv sync --locked --all-extras --group build --no-install-project --no-build
+uv sync --locked --all-extras --group build --no-build-isolation
 ```
 
 > [!TIP]

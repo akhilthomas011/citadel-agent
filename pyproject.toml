@@ -50,7 +50,7 @@ include = ["src/citadel_agent", "scripts/build_assets.py", "pyproject.toml", "uv
 path = "scripts/build_assets.py"
 
 [dependency-groups]
-build = ["hatchling==1.32.4"]
+build = ["hatchling==1.32.4", "editables==0.5"]
 dev = [
     "ipykernel>=7.4.0",
     "ipywidgets>=8.1.9",

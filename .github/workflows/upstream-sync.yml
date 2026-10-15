@@ -63,7 +63,9 @@ jobs:
         run: az bicep install
 
       - name: Install the agent and its development dependencies
-        run: uv sync --locked --all-extras
+        run: |
+          uv sync --locked --all-extras --group build --no-install-project --no-build
+          uv sync --locked --all-extras --group build --no-build-isolation
 
       - name: Evaluate upstream and move the pin when it is compatible
         id: sync
