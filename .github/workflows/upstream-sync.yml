@@ -38,6 +38,8 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      UV_NO_SYNC: "true"
     permissions:
       contents: read
     outputs:

@@ -23,6 +23,9 @@ jobs:
     name: test (${{ matrix.os }}, python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    env:
+      # The preceding locked install owns the environment, including build/devui extras.
+      UV_NO_SYNC: "true"
     strategy:
       fail-fast: false
       matrix:
