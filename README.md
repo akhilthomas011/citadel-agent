@@ -15,6 +15,18 @@ Citadel manages the gateway through version-controlled contracts (`.bicepparam` 
 
 The agent always deploys through these upstream contracts. It never re-implements the infrastructure as code.
 
+### Release scope
+
+The v1.0 target is operations for an **existing hub**, not provisioning the
+entire accelerator or supporting every upstream API. See the
+[release notes](CHANGELOG.md) and [security policy](SECURITY.md).
+Container Apps hosting with a UI is planned separately; DevUI is for local
+testing, not a production multi-user frontend. Production deployments require
+enforced repository reviews, environment approvals and Azure identity controls.
+
+The agent is [MIT licensed](LICENSE). Existing source and upstream copyright
+and license notices remain in force.
+
 ## What it can do
 
 Application teams can:
@@ -46,7 +58,7 @@ Clone the repository with its pinned upstream submodule and install the dependen
 ```bash
 git clone --recurse-submodules <this-repository-url>
 cd AI-Gateway-Accelerator-Agent
-uv sync --all-extras
+uv sync --locked --all-extras
 ```
 
 > [!TIP]

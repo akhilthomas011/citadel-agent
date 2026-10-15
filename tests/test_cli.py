@@ -72,3 +72,37 @@ def test_commands_outside_a_checkout_fail_cleanly_instead_of_crashing(
     assert raised.value.code == 2
     assert "CITADEL_AGENT_HOME" in captured.err or "CITADEL_AGENT_HOME" in captured.out
     assert "Traceback" not in captured.err + captured.out
+
+
+@pytest.mark.parametrize("command", ["status", "lock", "sync"])
+def test_upstream_commands_reject_installed_assets(
+    command: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_lock(tmp_path)
+    monkeypatch.setattr(paths, "BUNDLED_ROOT", tmp_path)
+    monkeypatch.setenv(paths.ENV_HOME, str(tmp_path))
+    result = runner.invoke(app, ["upstream", command])
+    assert result.exit_code == 2, result.output
+    assert "checkout-only" in result.output
+
+
+def test_repo_init_uses_remote_for_installed_assets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from citadel_agent import cli_admin
+
+    _write_lock(tmp_path)
+    monkeypatch.setattr(paths, "BUNDLED_ROOT", tmp_path)
+    monkeypatch.setenv(paths.ENV_HOME, str(tmp_path))
+    policy = tmp_path / "policy.yaml"
+    policy.write_text("{}", encoding="utf-8")
+    calls = []
+
+    def initialize(path: Path, **kwargs: object) -> SimpleNamespace:
+        calls.append(kwargs)
+        return SimpleNamespace(root=path)
+
+    monkeypatch.setattr(cli_admin, "init_canonical_repository", initialize)
+    result = runner.invoke(app, ["repo", "init", "--path", str(tmp_path / "repo"), "--policy", str(policy)])
+    assert result.exit_code == 0, result.output
+    assert calls[0]["upstream_source"] == "https://example.test/repo.git"

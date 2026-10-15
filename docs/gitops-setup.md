@@ -17,7 +17,12 @@ Three workflows ship in `templates/contracts-repo/.github/workflows/`:
 
 ## Publish the agent package
 
-The workflows install the agent with `uv tool install`. Publish the agent source to a repository the runner can read and pin an exact commit:
+The workflows check out an agent commit and install its locked production and
+build dependencies from wheels using `uv sync --locked --no-dev --group build
+--no-install-project --no-build --python 3.11`. A second sync installs the agent
+with `--no-editable --no-build-isolation`, using the locked build environment.
+Publish the agent source with its reviewed public-index `uv.lock` to a repository
+the runner can read and pin an exact 40-character commit:
 
 1. Push the agent repository to GitHub. A public repository needs no credentials on the runner.
 2. Set a repository variable in the contracts repository:
@@ -28,6 +33,13 @@ The workflows install the agent with `uv tool install`. Publish the agent source
    ```
 
 3. Move the pin only after the new agent version passes its tests. Template hashes depend on the template sources, not on the compiler, so a newer pin can deploy changes prepared by an older agent.
+
+Only `git+https://github.com/<owner>/<repository>@<40-character-commit>` references
+are accepted, not branch names, package version ranges or arbitrary URLs. The
+installer checks the fetched SHA, initializes pinned submodules and installs
+before Azure sign-in. It ignores runner-local uv index configuration. Update
+all three workflow copies in existing contracts repositories when adopting this
+installation model; a template change does not propagate automatically.
 
 ## Create the Azure identities
 

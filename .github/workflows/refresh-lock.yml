@@ -11,6 +11,15 @@ name: refresh-lock
 
 on:
   workflow_dispatch:
+    inputs:
+      propose:
+        description: Open a pull request (false produces only a lock artifact)
+        type: boolean
+        default: true
+      upgrade:
+        description: Upgrade existing dependencies as well as resolving metadata
+        type: boolean
+        default: false
   schedule:
     - cron: "41 5 1 * *" # First day of each month, 05:41 UTC
 
@@ -41,7 +50,17 @@ jobs:
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Resolve the dependencies against the public index
-        run: uv lock --upgrade
+        shell: bash
+        env:
+          UPGRADE: ${{ inputs.upgrade }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$UPGRADE" == true || "$EVENT" == schedule ]]; then
+            uv --no-config lock --upgrade
+          else
+            uv --no-config lock
+          fi
 
       - name: Check the lock before proposing it
         shell: bash
@@ -55,7 +74,15 @@ jobs:
           grep -q 'sha256:' uv.lock || { echo "::error::The lock file has no hashes."; exit 1; }
           echo "packages locked: $(grep -c '^name = ' uv.lock)"
 
+      - name: Export the reviewed-source lock for restricted-network developers
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: public-uv-lock
+          path: uv.lock
+          retention-days: 7
+
       - name: Open a pull request when the lock changed
+        if: github.event_name == 'schedule' || inputs.propose
         shell: bash
         run: |
           set -euo pipefail

@@ -19,7 +19,7 @@ from citadel_agent.bootstrap import BootstrapError, run_bootstrap
 from citadel_agent.changes.engine import ChangeError
 from citadel_agent.changes.repo_init import RepoInitError, init_canonical_repository
 from citadel_agent.discovery import DiscoveryError, discover_environment
-from citadel_agent.paths import find_project_root
+from citadel_agent.paths import find_project_root, is_bundled_root
 from citadel_agent.runtime import build_runtime
 from citadel_agent.settings import Settings
 from citadel_agent.upstream.compat import assess_release
@@ -70,7 +70,9 @@ def repo_init(
             path,
             template_dir=root / "templates" / "contracts-repo",
             lock=lock,
-            upstream_source=str(root / lock.upstream.path),
+            upstream_source=(
+                lock.upstream.repository if is_bundled_root(root) else str(root / lock.upstream.path)
+            ),
             admin_policy_text=policy.read_text(encoding="utf-8"),
         )
     except (RepoInitError, ValueError) as exc:

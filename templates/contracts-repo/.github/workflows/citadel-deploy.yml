@@ -84,11 +84,23 @@ jobs:
         env:
           CITADEL_AGENT_PACKAGE: ${{ vars.CITADEL_AGENT_PACKAGE }}
         run: |
-          if [ -z "$CITADEL_AGENT_PACKAGE" ]; then
-            echo "::error::Set the repository variable CITADEL_AGENT_PACKAGE to the pinned Citadel Agent package, for example git+https://github.com/<org>/<agent-repository>@<commit>."
+          set -euo pipefail
+          if [[ ! "$CITADEL_AGENT_PACKAGE" =~ ^git\+https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)@([0-9a-f]{40})$ ]]; then
+            echo "::error::CITADEL_AGENT_PACKAGE must be git+https://github.com/<owner>/<repo>@<40-character-commit>."
             exit 1
           fi
-          uv tool install "$CITADEL_AGENT_PACKAGE"
+          repository="${BASH_REMATCH[1]}"
+          commit="${BASH_REMATCH[2]}"
+          agent="$RUNNER_TEMP/citadel-agent"
+          git init "$agent"
+          git -C "$agent" remote add origin "https://github.com/$repository"
+          git -C "$agent" fetch --depth=1 origin "$commit"
+          git -C "$agent" checkout --detach FETCH_HEAD
+          test "$(git -C "$agent" rev-parse HEAD)" = "$commit"
+          git -C "$agent" submodule update --init --recursive
+          uv --no-config sync --project "$agent" --locked --no-dev --group build --no-install-project --no-build --python 3.11
+          uv --no-config sync --project "$agent" --locked --no-dev --group build --no-editable --no-build-isolation --python 3.11
+          echo "$agent/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Sign in to Azure with OpenID Connect (deployment identity for this environment)
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0

@@ -31,7 +31,9 @@ uv.toml
 .DS_Store
 Thumbs.db
 
-# Not published: internal package-proxy lock file, local tool and editor files
-uv.lock
+# Local tool and editor files
 .roo/
 *.code-workspace
+
+# Local release backlog and fresh-session handoff
+/V1-TODO.local.md

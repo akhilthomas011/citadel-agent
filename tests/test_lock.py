@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from citadel_agent import paths
 from citadel_agent.upstream import lock as lockmod
 
 RELEASE = {"master-version": "1.0.2", "access-contract-version": "1.2.0"}
@@ -70,3 +71,14 @@ def test_check_lock_detects_commit_and_release_drift(tmp_path: Path, monkeypatch
 def test_pin_rejects_invalid_commit() -> None:
     with pytest.raises(ValidationError):
         lockmod.UpstreamPin(repository="r", branch="b", commit="not-a-sha", path="p", release={})
+
+
+def test_bundled_lock_and_git_are_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _make_checkout(tmp_path)
+    _patch_git(monkeypatch, COMMIT_A)
+    lock = lockmod.build_lock(tmp_path)
+    monkeypatch.setattr(paths, "BUNDLED_ROOT", tmp_path)
+    with pytest.raises(paths.CheckoutRequiredError, match="checkout-only"):
+        lockmod.write_lock(tmp_path, lock)
+    with pytest.raises(paths.CheckoutRequiredError, match="checkout-only"):
+        lockmod._git(tmp_path / lock.upstream.path, "rev-parse", "HEAD")
