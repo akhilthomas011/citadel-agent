@@ -20,7 +20,8 @@ be specified separately. No production hosted-service readiness is claimed.
 - Diagnostics, smoke tests, usage estimates and reviewed pricing seeding.
 - Key rotation, GitOps recording, upstream compatibility and synchronization.
 - Hardened manifest validation, approval diffs and workflow filename handling.
-- Reviewed dependency locking for checkout-based CI and contracts jobs.
+- Reviewed runtime and build dependency locking for CI and contracts jobs.
+- Self-contained wheel/sdist assets with clean-installed CLI/runtime checks.
 - Root MIT license, preserving existing source and upstream notices.
 
 ### Compatibility and release gates

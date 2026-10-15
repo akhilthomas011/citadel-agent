@@ -21,8 +21,8 @@ def test_contracts_install_the_pinned_checkout_with_a_lock(name: str) -> None:
     assert "[0-9a-f]{40}" in script
     assert 'test "$(git -C "$agent" rev-parse HEAD)" = "$commit"' in script
     assert "submodule update --init --recursive" in script
-    assert '--group build --no-install-project --no-build --python 3.11' in script
-    assert '--group build --no-editable --no-build-isolation --python 3.11' in script
+    assert "--group build --no-install-project --no-build --python 3.11" in script
+    assert "--group build --no-editable --no-build-isolation --python 3.11" in script
     assert "uv tool install" not in script
     for step in steps:
         if step.get("uses", "").startswith("azure/login@"):

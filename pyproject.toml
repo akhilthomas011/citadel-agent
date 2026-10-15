@@ -44,7 +44,7 @@ build-backend = "hatchling.build"
 packages = ["src/citadel_agent"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/citadel_agent", "scripts/build_assets.py", "pyproject.toml", "README.md", "LICENSE"]
+include = ["src/citadel_agent", "scripts/build_assets.py", "pyproject.toml", "uv.lock", "README.md", "LICENSE", "CHANGELOG.md", "SECURITY.md"]
 
 [tool.hatch.build.hooks.custom]
 path = "scripts/build_assets.py"

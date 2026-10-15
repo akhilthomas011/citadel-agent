@@ -77,6 +77,40 @@ uv run citadel-agent version
 uv run citadel-agent upstream status
 ```
 
+### Installed package (no checkout at runtime)
+
+Wheels include trusted skills, repository templates, example configuration and
+runtime content from the exact upstream pin, including its license. They do not
+fetch a floating upstream branch at startup. Upstream synchronization is a
+maintainer operation requiring a source checkout; update the installed artifact
+to consume a newer tested pin.
+
+To build and install a reproducible artifact on Windows:
+
+```powershell
+uv sync --locked --all-extras --group build --no-install-project --no-build
+uv sync --locked --all-extras --group build --no-build-isolation
+uv build --no-build-isolation --python .venv\Scripts\python.exe --out-dir build\dist
+uv export --locked --all-extras --no-dev --no-emit-project --output-file build\runtime-requirements.txt
+uv venv build\installed --python 3.11
+uv pip install --python build\installed\Scripts\python.exe --require-hashes -r build\runtime-requirements.txt
+$wheel = (Get-ChildItem build\dist\*.whl).FullName
+uv pip install --python build\installed\Scripts\python.exe --no-deps $wheel
+```
+
+On Linux, virtualenv Python is under `bin/python` rather than `Scripts/python.exe`.
+Use the same lock for dependency installation; installing only the wheel with
+unconstrained dependency resolution is not the reproducible release path.
+
+The installed CLI works from any directory. Configuration comes from environment
+variables or the current directory's `.env`. Set `CITADEL_AGENT_STATE_DIR` to a
+writable persistent location; packaged defaults are `%LOCALAPPDATA%\citadel-agent`
+on Windows and `$XDG_STATE_HOME/citadel-agent` (or `~/.local/state/citadel-agent`)
+on Linux. State must not be written into the installed package. This enables a
+future container deployment, but persistence, user isolation and UI design remain
+separate work. `repo init` still needs Git/network access to clone the exact
+upstream commit into the new contracts repository.
+
 ## Set up an environment
 
 The agent works with an existing Citadel hub and a canonical contracts repository. The repository holds the contracts and the admin policy that decides, per environment, whether changes deploy directly (dev and test only) or through pull requests.
