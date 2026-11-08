@@ -11,7 +11,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field, ValidationError
 
-from citadel_agent.contracts.backend import BackendContractIntent
+from citadel_agent.contracts.backend import BackendContractIntent, ProviderBackendDraft
 from citadel_agent.contracts.common import ContractMetadata
 from citadel_agent.gateway.client import GatewayClient
 from citadel_agent.policy.admin import Operation
@@ -145,6 +145,7 @@ def draft_backend_change(
     circuit_breaker_enabled: bool | None = None,
     session_affinity_enabled: bool | None = None,
     draft_id: str | None = None,
+    provider_backend: ProviderBackendDraft | None = None,
 ) -> str:
     env_name = ctx.environment_name(environment)
     env = ctx.environment(env_name)
@@ -175,6 +176,38 @@ def draft_backend_change(
         prerequisite = _missing_role_prerequisite(ctx, env, account_id, backend["backendId"])
         if prerequisite:
             prerequisites.append(prerequisite)
+    if provider_backend:
+        backend = {
+            "backendId": provider_backend.backend_id,
+            "backendType": provider_backend.backend_type,
+            "endpoint": provider_backend.endpoint,
+            "authType": provider_backend.auth_type,
+            "supportedModels": [{"name": name} for name in provider_backend.models],
+        }
+        if provider_backend.auth_config:
+            backend["authConfig"] = provider_backend.auth_config.to_param()
+        existing = next(
+            (b for b in data["backends"] if b["backendId"].lower() == backend["backendId"].lower()), None
+        )
+        if existing and existing["backendType"] != backend["backendType"]:
+            raise ToolInputError(
+                f"Backend ID {backend['backendId']} already belongs to provider {existing['backendType']}; "
+                "use a different ID or remove it first."
+            )
+        for key, value in (("priority", priority), ("weight", weight)):
+            if value is not None:
+                backend[key] = value
+            elif existing and key in existing:
+                backend[key] = existing[key]
+        model_names = ", ".join(provider_backend.models)
+        if existing:
+            existing.update(backend)
+            if "authConfig" not in backend:
+                existing.pop("authConfig", None)
+            changes.append(f"Updated backend {backend['backendId']}: {model_names}")
+        else:
+            data["backends"].append(backend)
+            changes.append(f"Added backend {backend['backendId']}: {model_names}")
     if remove_backend:
         remaining = [b for b in data["backends"] if b["backendId"].lower() != remove_backend.lower()]
         if len(remaining) == len(data["backends"]):
@@ -198,7 +231,9 @@ def draft_backend_change(
         data["sessionAffinityEnabled"] = session_affinity_enabled
         changes.append(f"Session affinity {'on' if session_affinity_enabled else 'off'}")
     if not changes and source.startswith("the contracts repository"):
-        raise ToolInputError("Nothing to change: name an account to add, a backend to remove or an alias")
+        raise ToolInputError(
+            "Nothing to change: name an account or provider backend to add, a backend to remove or an alias"
+        )
     try:
         intent = BackendContractIntent.model_validate(data)
     except ValidationError as exc:
@@ -278,6 +313,7 @@ def register_backend_tools(registry: ToolRegistry, ctx: ToolContext) -> None:
         draft_id: Annotated[
             str | None, Field(description="Revise this draft instead of creating a new one.")
         ] = None,
+        provider_backend: ProviderBackendDraft | None = None,
     ) -> str:
         return draft_backend_change(
             ctx,
@@ -294,6 +330,7 @@ def register_backend_tools(registry: ToolRegistry, ctx: ToolContext) -> None:
             circuit_breaker_enabled,
             session_affinity_enabled,
             draft_id,
+            provider_backend,
         )
 
     registry.add(
@@ -301,7 +338,8 @@ def register_backend_tools(registry: ToolRegistry, ctx: ToolContext) -> None:
             "draft_backend_change",
             draft_backend_change_tool,
             "Draft a change to the gateway's model backends, aliases, circuit breaker or session affinity "
-            "(merged into the authoritative backend contract). Changes nothing until prepared and approved.",
+            "(merged into the authoritative backend contract). Supports non-Azure provider endpoints with "
+            "Key Vault credential references. Changes nothing until prepared and approved.",
             personas=OPERATOR_ONLY,
         )
     )

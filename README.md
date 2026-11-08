@@ -20,9 +20,17 @@ The agent always deploys through these upstream contracts. It never re-implement
 The v1.0 target is operations for an **existing hub**, not provisioning the
 entire accelerator or supporting every upstream API. See the
 [release notes](CHANGELOG.md) and [security policy](SECURITY.md).
-Container Apps hosting with a UI is planned separately; DevUI is for local
-testing, not a production multi-user frontend. Production deployments require
-enforced repository reviews, environment approvals and Azure identity controls.
+The next deployment scope also includes greenfield installation: provision APIM
+and related infrastructure through pinned upstream Bicep, then bootstrap and
+install the hosted product. This orchestration is planned, not implemented by
+the current existing-host installer.
+See the [customer deployment plan](docs/customer-deployment-plan.md).
+The hosted portal target is an App Service UI/BFF and a private agent API on
+Container Apps. DevUI is for local testing, not a production multi-user
+frontend. The three-page hosted portal UI and application services are implemented,
+with artifact publishing, a preview-first private-network provisioning installer
+and deployment to prepared hosts. Live Azure acceptance and container publication
+are still pending. See the [hosted portal guide](docs/hosted-portal.md).
 
 The agent is [MIT licensed](LICENSE). Existing source and upstream copyright
 and license notices remain in force.
@@ -179,6 +187,60 @@ The agent never edits your working copy of the contracts repository. It keeps it
 | `CITADEL_AGENT_OTEL_CONSOLE`     | `true` prints OpenTelemetry spans to the console                         |
 | `GITHUB_TOKEN`                   | Token for opening pull requests on GitHub                                |
 
+### Hosted portal
+
+The portal runtime has separate BFF and private-agent app factories. They use
+managed identity for Azure access, load the MSAL confidential-client secret from
+Key Vault, and connect to an existing application Cosmos DB container. The
+runtime does not create Azure resources or configure Entra app registrations.
+The React/TypeScript UI provides the Gateway Assistant, FinOps and Operations
+pages through the BFF. See [build, identity, hosting and deployment setup](docs/hosted-portal.md).
+
+FinOps implements all six reference analytical views with maintained generations,
+resumable source scans and report-bound exports. Operations adds redacted request
+investigation, fired alerts, pipeline telemetry and separate usage attribution.
+New hosting uses a durable assistant queue and private scheduled worker.
+Local acceptance is not customer sign-in, data reconciliation or release approval.
+
+Configuration uses the `CITADEL_PORTAL_` prefix:
+
+| Variable | Purpose |
+| --- | --- |
+| `CITADEL_PORTAL_TENANT_ID` | Entra tenant ID pinned by both token validators |
+| `CITADEL_PORTAL_CLIENT_ID` | Confidential BFF OAuth client ID, distinct from its managed identity |
+| `CITADEL_PORTAL_API_AUDIENCE` | Audience for delegated user access tokens |
+| `CITADEL_PORTAL_DELEGATED_SCOPE` | Full delegated scope requested by MSAL |
+| `CITADEL_PORTAL_DELEGATED_SCOPE_NAME` | Scope claim required in validated user tokens |
+| `CITADEL_PORTAL_CLIENT_SECRET_NAME` | Key Vault secret name for the confidential client |
+| `CITADEL_PORTAL_KEY_VAULT_URL` | HTTPS URL of the existing Key Vault |
+| `CITADEL_PORTAL_COSMOS_ENDPOINT` | HTTPS endpoint of the existing application Cosmos account |
+| `CITADEL_PORTAL_COSMOS_DATABASE` | Existing portal database |
+| `CITADEL_PORTAL_COSMOS_CONTAINER` | Existing portal state container |
+| `CITADEL_PORTAL_ANALYTICS_CONTAINER` | Optional maintained analytics container, separate from portal state |
+| `CITADEL_PORTAL_DURABLE_TURNS_ENABLED` | Enable durable queue acceptance; new hosting sets true, older hosts default false |
+| `CITADEL_PORTAL_ASSISTANT_WORKER_MAX_SECONDS` | Finite worker drain budget (default 240); does not extend an in-flight turn lease |
+| `CITADEL_PORTAL_PORTAL_ORIGIN` | Canonical HTTPS browser origin |
+| `CITADEL_PORTAL_CALLBACK_URI` | Same-origin `/auth/callback` HTTPS redirect URI |
+| `CITADEL_PORTAL_AGENT_API_URL` | HTTPS URL for the private agent API |
+| `CITADEL_PORTAL_AGENT_API_AUDIENCE` | Audience used for BFF-to-agent managed-identity tokens |
+| `CITADEL_PORTAL_AGENT_API_TOKEN_SCOPE` | Optional application `/.default` request scope, distinct from v2 token audience |
+| `CITADEL_PORTAL_BFF_SERVICE_CLIENT_ID` | BFF managed identity client ID trusted by the private agent |
+| `CITADEL_PORTAL_HUB_CONFIG` | Agent-only JSON connections, hub scope and administrator bootstrap grants |
+| `CITADEL_PORTAL_STATIC_DIRECTORY` | Optional override for the packaged BFF UI directory |
+| `CITADEL_PORTAL_MANAGED_IDENTITY_CLIENT_ID` | Optional user-assigned managed identity client ID |
+| `CITADEL_PORTAL_SESSION_LIFETIME_SECONDS` | Session lifetime, from 60 to 3600 seconds (default 900) |
+| `CITADEL_PORTAL_AUTH_FLOW_LIFETIME_SECONDS` | Sign-in flow lifetime, from 60 to 600 seconds (default 300) |
+
+The state container must be provisioned with `/id` as its partition key and TTL
+enabled. Configure the Entra delegated scope and the `Portal.InvokeAgent` app
+role assignment before starting either app. The hosted agent requires the
+hub configuration and separate BFF service client ID. The first-install workflow
+can provision private hosting and configure the customer-selected existing Linux
+App Service after strict preflight and ARM what-if. It defaults to preview-only.
+The prepared-host update workflow does not provision infrastructure. Neither
+workflow creates the customer's Entra registration or gateway/model. Do not
+treat local tests as production Azure acceptance.
+
 ### Commands
 
 | Command                            | Purpose                                                           |
@@ -198,6 +260,10 @@ The agent never edits your working copy of the contracts repository. It keeps it
 
 ## Documentation
 
+The [product completion plan](docs/product-completion-plan.md) tracks the
+implemented analytics, dashboard parity, Operations and reliability milestones,
+plus the remaining owner-controlled publication and customer acceptance gates.
+
 | Guide                                             | For                                                        |
 |---------------------------------------------------|------------------------------------------------------------|
 | [Quickstart](docs/quickstart.md)                  | Application teams using the gateway                        |
@@ -206,6 +272,8 @@ The agent never edits your working copy of the contracts repository. It keeps it
 | [Publishing tools and agents](docs/publishing.md) | MCP and A2A publish contracts (preview)                    |
 | [Security model](docs/security.md)                | Trust boundaries, approvals and secret handling            |
 | [Token usage](docs/token-usage.md)                | Tool routing, compaction and measuring input tokens        |
+| [Portal analytics data](docs/analytics-data.md)    | Usage normalization, token pricing and fixed-cost allocation |
+| [FinOps analytical parity](docs/finops-parity.md) | Six-view traceability, deliberate measure differences and privacy |
 | [Evaluations](docs/evaluations.md)                | Live behavior checks with a stubbed toolset                |
 | [Validation notebooks](docs/validation.md)        | Running upstream's baseline notebooks and what they found  |
 | [Upstream sync](docs/upstream-sync.md)            | Moving the agent to a newer upstream Citadel commit        |

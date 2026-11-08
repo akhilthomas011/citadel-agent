@@ -275,6 +275,58 @@ def test_consumers_are_sent_to_the_platform_team_for_backends(runtime) -> None:
     )
 
 
+def test_platform_operator_can_draft_and_prepare_a_gemini_backend(runtime) -> None:
+    draft_reply = (
+        "Backend contract change drafted (draft_id: d-backend-gemini-dev-1).\n"
+        "* Added backend gemini-openai: gemini-2.5-flash\n"
+        "Nothing is deployed yet. Review with the user, then prepare this draft."
+    )
+
+    def check(o: Outcome) -> list[str]:
+        problems = []
+        calls = o.called("draft_backend_change")
+        if not calls:
+            return ["the provider backend was not drafted"]
+        args = calls[0].arguments
+        provider = args.get("provider_backend") or args.get("providerBackend") or {}
+        if provider.get("backendType", provider.get("backend_type")) != "gemini-openai":
+            problems.append("the tool call used the wrong backend type")
+        auth = provider.get("authConfig", provider.get("auth_config")) or {}
+        if auth.get("namedValueKey", auth.get("named_value_key")) != "gemini-openai-key":
+            problems.append("the tool call did not use the provided APIM named-value key")
+        if auth.get("keyVaultSecretUri", auth.get("key_vault_secret_uri")) != (
+            "https://kv.example.vault.azure.net/secrets/gemini-openai-key"
+        ):
+            problems.append("the tool call did not use the provided Key Vault secret URI")
+        if "secretValue" in str(args) or "apiKey" in str(args):
+            problems.append("the tool call included a literal credential")
+        if not o.called("prepare_change"):
+            problems.append("the change was not prepared for review")
+        if o.approvals or o.called("execute_change"):
+            problems.append("the agent attempted deployment before approval")
+        return problems
+
+    evaluate(
+        lambda: run_conversation(
+            runtime,
+            [
+                "As platform operator, draft and prepare a Gemini OpenAI-compatible backend in dev. "
+                "Use endpoint https://generativelanguage.googleapis.com/v1beta/openai/, model "
+                "gemini-2.5-flash, APIM named-value key gemini-openai-key, and Key Vault secret URI "
+                "https://kv.example.vault.azure.net/secrets/gemini-openai-key. Do not ask me for the "
+                "secret value and do not deploy."
+            ],
+            canned={
+                "draft_backend_change": draft_reply,
+                "prepare_change": PREPARE,
+                "execute_change": EXECUTED,
+            },
+            approve=lambda _call: False,
+        ),
+        check,
+    )
+
+
 def test_error_questions_use_the_error_catalog(runtime) -> None:
     def check(o: Outcome) -> list[str]:
         problems = []

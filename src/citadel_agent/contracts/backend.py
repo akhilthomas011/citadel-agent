@@ -45,6 +45,18 @@ AuthType = Literal[
     "none",
 ]
 API_KEY_AUTH_TYPES = frozenset({"api-key-bearer", "api-key-header", "api-key-gemini", "api-key-anthropic"})
+PROVIDER_AUTH_TYPES: dict[str, frozenset[str]] = {
+    "aws-bedrock": frozenset({"aws-sigv4", "api-key-bearer"}),
+    "aws-bedrock-mantle": frozenset({"api-key-bearer"}),
+    "gemini": frozenset({"api-key-gemini"}),
+    "gemini-openai": frozenset({"api-key-bearer"}),
+    "anthropic": frozenset({"api-key-anthropic"}),
+}
+CONVERSATIONAL_PROVIDER_AUTH_TYPES: dict[str, frozenset[str]] = {
+    **PROVIDER_AUTH_TYPES,
+    "aws-bedrock": frozenset({"api-key-bearer"}),
+    "external": frozenset({"none", "api-key-bearer", "api-key-header"}),
+}
 
 # Wire-protocol family per backend type. Model aliases may only combine members that speak the
 # same protocol, because the gateway rewrites only the request's "model" field.
@@ -86,6 +98,66 @@ class BackendAuthConfig(CitadelModel):
     header_name: str | None = None
 
 
+class ProviderBackendAuthReference(CitadelModel):
+    """Key Vault reference accepted by conversational provider onboarding."""
+
+    named_value_key: str = Field(
+        pattern=r"^[A-Za-z0-9._-]+$",
+        description="APIM named-value key for this credential.",
+    )
+    key_vault_secret_uri: HttpsUrl = Field(description="HTTPS URI of the Key Vault secret.")
+
+
+class ProviderBackendDraft(CitadelModel):
+    """Safe, conversational input for adding a supported non-Azure backend."""
+
+    backend_id: str = Field(
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$",
+        description="Unique backend resource ID.",
+    )
+    backend_type: Literal[
+        "aws-bedrock",
+        "aws-bedrock-mantle",
+        "gemini",
+        "gemini-openai",
+        "anthropic",
+        "external",
+    ]
+    endpoint: HttpsUrl = Field(description="HTTPS base URL for the provider endpoint.")
+    models: list[ModelName] = Field(min_length=1, description="One or more provider model IDs.")
+    auth_type: Literal[
+        "api-key-bearer",
+        "api-key-header",
+        "api-key-gemini",
+        "api-key-anthropic",
+        "none",
+    ]
+    auth_config: ProviderBackendAuthReference | None = Field(
+        default=None,
+        description="Key Vault secret URI and APIM named-value key. Never provide the secret itself.",
+    )
+
+    @model_validator(mode="after")
+    def _provider_auth_and_models(self) -> ProviderBackendDraft:
+        allowed_auth = CONVERSATIONAL_PROVIDER_AUTH_TYPES[self.backend_type]
+        if self.auth_type not in allowed_auth:
+            raise ValueError(
+                f"{self.backend_type} supports conversational auth type(s): {', '.join(sorted(allowed_auth))}"
+            )
+        if self.auth_type in API_KEY_AUTH_TYPES:
+            config = self.auth_config
+            if config is None or not config.named_value_key or not config.key_vault_secret_uri:
+                raise ValueError(
+                    f"{self.auth_type} requires authConfig.namedValueKey and "
+                    "authConfig.keyVaultSecretUri; literal credentials are not accepted"
+                )
+        elif self.auth_config is not None:
+            raise ValueError("authConfig is only valid for API-key authentication")
+        if len({name.lower() for name in self.models}) != len(self.models):
+            raise ValueError("models must not contain duplicates")
+        return self
+
+
 class BackendEntry(UpstreamShapedModel):
     """One LLM backend (``llmBackendConfig[]``)."""
 
@@ -102,6 +174,12 @@ class BackendEntry(UpstreamShapedModel):
 
     @model_validator(mode="after")
     def _auth_and_models(self) -> BackendEntry:
+        allowed_auth = PROVIDER_AUTH_TYPES.get(self.backend_type)
+        if self.auth_type is not None and allowed_auth and self.auth_type not in allowed_auth:
+            raise ValueError(
+                f"Backend '{self.backend_id}' type {self.backend_type} does not support "
+                f"authType {self.auth_type}"
+            )
         if self.auth_type in API_KEY_AUTH_TYPES:
             config = self.auth_config
             if config is None or not config.named_value_key or not config.key_vault_secret_uri:
@@ -169,11 +247,11 @@ class BackendContractIntent(CitadelModel):
         ids = [b.backend_id.lower() for b in self.backends]
         if len(ids) != len(set(ids)):
             raise ValueError("backendId values must be unique")
-        if (
-            any(b.backend_type == "aws-bedrock" for b in self.backends)
-            and self.aws_credentials_source == "none"
-        ):
-            raise ValueError("aws-bedrock backends need awsCredentialsSource: pipeline-secret")
+        requires_sigv4_credentials = any(
+            b.backend_type == "aws-bedrock" and b.auth_type in (None, "aws-sigv4") for b in self.backends
+        )
+        if requires_sigv4_credentials and self.aws_credentials_source == "none":
+            raise ValueError("aws-bedrock SigV4 backends need awsCredentialsSource: pipeline-secret")
         self._validate_aliases()
         check_secret_ingress(self, "Backend contract intent")
         return self
