@@ -1,4 +1,8 @@
-# Changelog
+---
+title: Changelog
+description: Implemented Citadel capabilities, deployment scope and release acceptance boundaries.
+ms.date: 2026-11-08
+---
 
 ## Unreleased - v1.0 preparation
 
@@ -9,9 +13,14 @@ It does not provision the full accelerator or promise parity with every
 upstream API. CLI and DevUI are supported local interfaces; DevUI is not a
 production multi-user UI.
 
-Container Apps hosting with a UI is the intended next deployment destination.
-Hosting, authentication, persistence, user isolation and UI requirements will
-be specified separately. No production hosted-service readiness is claimed.
+The three-page Linux App Service UI/BFF, private Container Apps agent and
+scheduled workers are locally implemented and verified. Production hosted
+readiness remains gated by reviewed publication and real customer acceptance.
+
+Greenfield deployment now includes APIM and related infrastructure through the
+pinned upstream Bicep, followed by product-host/identity bootstrap and
+installation. The current installer still requires existing prerequisite hosts;
+greenfield orchestration is planned rather than claimed as implemented.
 
 ### Included capabilities
 
@@ -22,6 +31,14 @@ be specified separately. No production hosted-service readiness is claimed.
 - Hardened manifest validation, approval diffs and workflow filename handling.
 - Reviewed runtime and build dependency locking for CI and contracts jobs.
 - Self-contained wheel/sdist assets with clean-installed CLI/runtime checks.
+- Hosted Entra sessions, exact hub grants, persisted conversations and
+  hash-bound independently approved PR-only changes.
+- Resumable FinOps reports, maintained analytics, six analytical views and
+  report-bound authorized exports with explicit pricing/quality limitations.
+- Scoped Operations request evidence, alerts, pipeline telemetry and
+  nonfinancial attribution; durable assistant work with no started-effect replay.
+- Private hosting Bicep, preview-first workflows and sealed Linux installer
+  artifacts without customer-specific source or dependency rebuilds.
 - Root MIT license, preserving existing source and upstream notices.
 
 ### Compatibility and release gates

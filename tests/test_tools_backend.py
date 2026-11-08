@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any
@@ -11,10 +12,10 @@ from typing import Any
 import pytest
 
 from citadel_agent.changes.repository import IntentRecord
-from citadel_agent.contracts.backend import BackendContractIntent
+from citadel_agent.contracts.backend import BackendContractIntent, ProviderBackendDraft
 from citadel_agent.gateway.models import BackendContractView
 from citadel_agent.tools import backend
-from citadel_agent.tools.registry import ToolInputError
+from citadel_agent.tools.registry import ToolInputError, ToolRegistry
 from tool_fakes import FakeContext, make_intent, make_record
 
 SUB = "11111111-1111-1111-1111-111111111111"
@@ -139,6 +140,142 @@ def test_add_account_discovers_deployments_and_role_prerequisite(tmp_path: Path)
 
     assigned = BackendContext(tmp_path / "b", assigned=True)
     assert "Prerequisite" not in backend.draft_backend_change(assigned, add_account="aif-new")
+
+
+@pytest.mark.usefixtures("live_gateway")
+def test_add_provider_backend_merges_key_vault_credentials_into_authoritative_intent(tmp_path: Path) -> None:
+    context = BackendContext(tmp_path)
+    provider = ProviderBackendDraft.model_validate(
+        {
+            "backendId": "gemini-openai-prod",
+            "backendType": "gemini-openai",
+            "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/",
+            "models": ["gemini-2.5-flash"],
+            "authType": "api-key-bearer",
+            "authConfig": {
+                "namedValueKey": "gemini-openai-key",
+                "keyVaultSecretUri": "https://kv.example.vault.azure.net/secrets/gemini-openai-key",
+            },
+        }
+    )
+
+    output = backend.draft_backend_change(context, provider_backend=provider, priority=2)
+
+    assert "Added backend gemini-openai-prod: gemini-2.5-flash" in output
+    draft = context.drafts.list()[0]
+    assert {b.backend_id for b in draft.intent.backends} == {"aif-0", "gemini-openai-prod"}
+    added = next(b for b in draft.intent.backends if b.backend_id == "gemini-openai-prod")
+    assert added.backend_type == "gemini-openai"
+    assert added.priority == 2
+    assert added.auth_config is not None
+    assert added.auth_config.named_value_key == "gemini-openai-key"
+    assert (
+        added.auth_config.key_vault_secret_uri
+        == "https://kv.example.vault.azure.net/secrets/gemini-openai-key"
+    )
+
+
+def test_provider_backend_rejects_incompatible_auth_and_plaintext_credentials() -> None:
+    base = {
+        "backendId": "gemini",
+        "backendType": "gemini",
+        "endpoint": "https://generativelanguage.googleapis.com/",
+        "models": ["gemini-2.5-flash"],
+    }
+    with pytest.raises(ValueError, match="api-key-gemini"):
+        ProviderBackendDraft.model_validate({**base, "authType": "api-key-bearer"})
+    with pytest.raises(ValueError, match=r"authConfig\.keyVaultSecretUri"):
+        ProviderBackendDraft.model_validate({**base, "authType": "api-key-gemini"})
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        ProviderBackendDraft.model_validate(
+            {
+                **base,
+                "authType": "api-key-gemini",
+                "authConfig": {
+                    "namedValueKey": "gemini-key",
+                    "keyVaultSecretUri": "https://kv.example.vault.azure.net/secrets/gemini-key",
+                    "secretValue": "must-not-be-accepted",
+                },
+            }
+        )
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        ProviderBackendDraft.model_validate(
+            {
+                "backendId": "external",
+                "backendType": "external",
+                "endpoint": "https://provider.example.com/",
+                "models": ["model-v1"],
+                "authType": "api-key-header",
+                "authConfig": {
+                    "namedValueKey": "provider-key",
+                    "keyVaultSecretUri": "https://kv.example.vault.azure.net/secrets/provider-key",
+                    "headerName": "x-custom-key",
+                },
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("backend_type", "auth_type"),
+    [
+        ("aws-bedrock", "api-key-bearer"),
+        ("aws-bedrock-mantle", "api-key-bearer"),
+        ("gemini", "api-key-gemini"),
+        ("gemini-openai", "api-key-bearer"),
+        ("anthropic", "api-key-anthropic"),
+        ("external", "none"),
+        ("external", "api-key-bearer"),
+        ("external", "api-key-header"),
+    ],
+)
+def test_provider_backend_draft_accepts_supported_auth_pairs(backend_type: str, auth_type: str) -> None:
+    provider: dict[str, Any] = {
+        "backendId": "provider",
+        "backendType": backend_type,
+        "endpoint": "https://provider.example.com/",
+        "models": ["model-v1"],
+        "authType": auth_type,
+    }
+    if auth_type != "none":
+        provider["authConfig"] = {
+            "namedValueKey": "provider-key",
+            "keyVaultSecretUri": "https://kv.example.vault.azure.net/secrets/provider-key",
+        }
+
+    result = ProviderBackendDraft.model_validate(provider)
+
+    assert result.backend_type == backend_type
+    assert result.auth_type == auth_type
+
+
+def test_provider_backend_fields_are_exposed_only_to_operator_tool_schema(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    backend.register_backend_tools(registry, BackendContext(tmp_path))
+
+    operator_tool = next(t for t in registry.build("operator") if t.name == "draft_backend_change")
+    schema = json.dumps(operator_tool.to_json_schema_spec())
+
+    assert "provider_backend" in schema
+    assert "keyVaultSecretUri" in schema
+    assert "headerName" not in schema
+    assert "secretValue" not in schema
+    assert "draft_backend_change" not in {t.name for t in registry.build("consumer")}
+
+
+@pytest.mark.usefixtures("live_gateway")
+def test_provider_backend_cannot_repurpose_an_existing_id_for_another_type(tmp_path: Path) -> None:
+    context = BackendContext(tmp_path)
+    provider = ProviderBackendDraft.model_validate(
+        {
+            "backendId": "aif-0",
+            "backendType": "external",
+            "endpoint": "https://llm.example.com/",
+            "models": ["custom-model"],
+            "authType": "none",
+        }
+    )
+    with pytest.raises(ToolInputError, match="already belongs to provider ai-foundry"):
+        backend.draft_backend_change(context, provider_backend=provider)
 
 
 def test_alias_and_removal_impact(tmp_path: Path) -> None:

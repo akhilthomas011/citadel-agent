@@ -1,0 +1,99 @@
+name: deploy hosted product to prepared hosts
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Protected GitHub environment containing customer host variables
+        type: environment
+        required: true
+      artifact_run_id:
+        description: Successful publish-hosted workflow run from this repository
+        type: string
+        required: true
+      source_sha:
+        description: Full 40-character commit SHA used by that artifact run
+        type: string
+        required: true
+      agent_image:
+        description: Published public image pinned by digest (ghcr.io/owner/repo@sha256:...)
+        type: string
+        required: true
+      apply:
+        description: Deploy after preflight (false validates existing hosts without changing Azure)
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hosted-deployment-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/verify-hosted-artifact.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      artifact_run_id: ${{ inputs.artifact_run_id }}
+
+  deploy:
+    needs: verify
+    runs-on: ${{ vars.CITADEL_DEPLOY_RUNNER || 'ubuntu-latest' }}
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      UV_NO_SYNC: "true"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source_sha }}
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: citadel-hosted-${{ inputs.source_sha }}
+          path: build/hosted
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Install locked deployment tooling before Azure sign-in
+        run: uv sync --locked --no-install-project --no-build --python 3.11
+      - name: Validate artifact hash
+        env:
+          PYTHONPATH: src
+          AGENT_IMAGE: ${{ inputs.agent_image }}
+        run: |
+          uv run --no-sync python -c \
+            "from pathlib import Path; import os; from citadel_agent.portal.installation import verify_bundle; verify_bundle(Path('build/hosted/citadel-portal.zip'), expected_image=os.environ['AGENT_IMAGE'])"
+      - uses: azure/login@8216e11d8cd9b42fe925c852af8e76311ff067ac # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Validate or deploy to prepared private hosts
+        env:
+          SUBSCRIPTION: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          WEB_RESOURCE_GROUP: ${{ vars.CITADEL_WEB_RESOURCE_GROUP }}
+          WEB_APP: ${{ vars.CITADEL_WEB_APP }}
+          AGENT_RESOURCE_GROUP: ${{ vars.CITADEL_AGENT_RESOURCE_GROUP }}
+          AGENT_APP: ${{ vars.CITADEL_AGENT_APP }}
+          AGENT_IMAGE: ${{ inputs.agent_image }}
+          APPLY: ${{ inputs.apply }}
+          PYTHONPATH: src
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--subscription "$SUBSCRIPTION" --web-resource-group "$WEB_RESOURCE_GROUP"
+            --web-app "$WEB_APP" --agent-resource-group "$AGENT_RESOURCE_GROUP"
+            --agent-app "$AGENT_APP" --agent-image "$AGENT_IMAGE" --bundle build/hosted/citadel-portal.zip)
+          if [[ "$APPLY" == "true" ]]; then args+=(--apply); fi
+          uv run --no-sync python scripts/deploy_hosted.py "${args[@]}"

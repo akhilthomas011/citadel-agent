@@ -1,0 +1,160 @@
+name: publish hosted artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_image:
+        description: Publish the verified agent image to GHCR (otherwise only build artifacts)
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-hosted-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  infrastructure:
+    uses: ./.github/workflows/validate-hosted-infrastructure.yml
+
+  package:
+    needs: infrastructure
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: write
+    env:
+      UV_NO_SYNC: "true"
+    steps:
+      - name: Require reviewed default-branch source for image publication
+        if: inputs.publish_image
+        env:
+          SOURCE_REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          test "$SOURCE_REF" = "refs/heads/$DEFAULT_BRANCH" || {
+            echo "::error::Publish images only from reviewed default-branch source."
+            exit 1
+          }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Build and test the portal
+        working-directory: frontend
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test
+          npm run build
+      - name: Install locked Python tooling
+        run: |
+          uv sync --locked --group build --no-build --no-install-project --python 3.11
+          uv sync --locked --group build --no-build-isolation --python 3.11
+      - name: Validate hosted Python services
+        run: |
+          uv run --no-sync ruff check .
+          uv run --no-sync pytest -q \
+            tests/test_portal*.py tests/test_finops*.py tests/test_analytics*.py tests/test_azure_clients.py \
+            tests/test_operations_investigation.py tests/test_release_readiness.py \
+            tests/test_hosted_delivery.py tests/test_hosted_installation.py tests/test_hosted_infrastructure.py
+      - name: Package pinned runtime assets and self-contained Linux BFF
+        run: |
+          uv run --no-sync python scripts/prepare_hosted.py
+          uv build --wheel --no-build-isolation --out-dir build/hosted
+          uv run --no-sync python scripts/check_wheel.py --require-portal-ui build/hosted/*.whl
+          uv export --locked --no-dev --no-emit-project --output-file build/runtime-requirements.txt
+          uv pip install --target build/hosted-site --python-version 3.11 --python-platform x86_64-manylinux_2_28 --only-binary :all: --require-hashes -r build/runtime-requirements.txt
+          uv pip install --target build/hosted-site --no-deps build/hosted/*.whl
+          uv run --no-sync python scripts/prepare_hosted.py --site-packages build/hosted-site --installer
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Resolve image repository
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: echo "name=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        id: container
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ steps.image.outputs.name }}:${{ github.sha }}
+          build-args: |
+            BICEP_VERSION=v0.42.1
+            BICEP_SHA256=aed90eb2c69a6ee2bd70dc0d4354408ac4d04fd9911d3ec8e0cd74ad173e7139
+          provenance: false
+          sbom: false
+      - name: Accept the actual image offline before allowing publication
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}:${{ github.sha }}
+        run: |
+          docker run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/scripts/smoke_hosted_container.py,target=/checks/smoke.py,readonly" \
+            --entrypoint python "$IMAGE" -I /checks/smoke.py
+          wheels=(build/hosted/*.whl)
+          test "${#wheels[@]}" -eq 1
+          docker run --rm --network none --read-only --tmpfs /tmp:rw,exec,nosuid,size=512m \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/scripts/smoke_hosted_container.py,target=/checks/smoke.py,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/build/hosted,target=/bundle,readonly" \
+            --entrypoint python "$IMAGE" -I /checks/smoke.py \
+            --bundle /bundle/citadel-portal.zip --wheel "/bundle/$(basename "${wheels[0]}")" \
+            --installer /bundle/citadel-installer.zip
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        if: inputs.publish_image
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        id: published
+        if: inputs.publish_image
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.name }}:${{ github.sha }}
+          build-args: |
+            BICEP_VERSION=v0.42.1
+            BICEP_SHA256=aed90eb2c69a6ee2bd70dc0d4354408ac4d04fd9911d3ec8e0cd74ad173e7139
+          provenance: mode=max
+          sbom: true
+      - name: Bind the deployment artifact to its image digest
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.published.outputs.digest || steps.container.outputs.digest }}
+          PUBLISHED: ${{ inputs.publish_image }}
+        run: |
+          uv run --no-sync python -c \
+            "import json,os,pathlib; p=pathlib.Path('build/hosted/hosted-manifest.json'); m=json.loads(p.read_text()); m.update(sourceSha=os.environ['GITHUB_SHA'],imagePublished=os.environ['PUBLISHED']=='true',agentImage=os.environ['IMAGE']+'@'+os.environ['DIGEST']); p.write_text(json.dumps(m,indent=2)+'\n')"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: citadel-hosted-${{ github.sha }}
+          path: |
+            build/hosted/citadel-portal.zip
+            build/hosted/citadel-installer.zip
+            build/hosted/hosted-manifest.json
+            build/hosted/*.whl
+          if-no-files-found: error
+          retention-days: 14
+      - name: Report immutable outputs
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.published.outputs.digest || steps.container.outputs.digest }}
+          PUBLISHED: ${{ inputs.publish_image }}
+        run: |
+          printf 'BFF artifact: citadel-hosted-%s\n\nImage published: %s\n\nImage: `%s@%s`\n' \
+            "$GITHUB_SHA" "$PUBLISHED" "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          echo 'For anonymous customer pulls, make the GHCR package public after publication.' >> "$GITHUB_STEP_SUMMARY"

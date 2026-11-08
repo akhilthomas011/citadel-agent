@@ -309,7 +309,7 @@ def test_alias_cannot_mix_wire_protocols() -> None:
         BackendContractIntent.model_validate(data)
 
 
-def test_bedrock_requires_pipeline_credentials_and_flux_requires_model_path() -> None:
+def test_bedrock_sigv4_requires_pipeline_credentials_and_flux_requires_model_path() -> None:
     bedrock = backend_data()
     bedrock["backends"].append(
         {
@@ -324,6 +324,22 @@ def test_bedrock_requires_pipeline_credentials_and_flux_requires_model_path() ->
         BackendContractIntent.model_validate(bedrock)
     BackendContractIntent.model_validate(dict(bedrock, awsCredentialsSource="pipeline-secret"))
 
+    bedrock_api_key = backend_data()
+    bedrock_api_key["backends"].append(
+        {
+            "backendId": "bedrock-api-key",
+            "backendType": "aws-bedrock",
+            "endpoint": "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "authType": "api-key-bearer",
+            "authConfig": {
+                "namedValueKey": "bedrock-key",
+                "keyVaultSecretUri": "https://kv.vault.azure.net/secrets/bedrock-key",
+            },
+            "supportedModels": [{"name": "us.anthropic.claude-3-5-haiku-20241022-v1:0"}],
+        }
+    )
+    BackendContractIntent.model_validate(bedrock_api_key)
+
     flux = backend_data()
     flux["backends"].append(
         {
@@ -335,6 +351,26 @@ def test_bedrock_requires_pipeline_credentials_and_flux_requires_model_path() ->
     )
     with pytest.raises(ValidationError, match="modelPath"):
         BackendContractIntent.model_validate(flux)
+
+
+def test_provider_contract_rejects_provider_auth_mismatches() -> None:
+    data = backend_data()
+    data["backends"].append(
+        {
+            "backendId": "gemini",
+            "backendType": "gemini",
+            "endpoint": "https://generativelanguage.googleapis.com/",
+            "authType": "api-key-bearer",
+            "authConfig": {
+                "namedValueKey": "gemini-key",
+                "keyVaultSecretUri": "https://kv.vault.azure.net/secrets/gemini-key",
+            },
+            "supportedModels": [{"name": "gemini-2.5-flash"}],
+        }
+    )
+
+    with pytest.raises(ValidationError, match="does not support authType"):
+        BackendContractIntent.model_validate(data)
 
 
 # Publish contracts -----------------------------------------------------------------------------

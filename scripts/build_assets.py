@@ -96,10 +96,15 @@ def build_assets(root: Path, destination: Path) -> None:
 class CustomBuildHook(BuildHookInterface):
     def initialize(self, version: str, build_data: dict) -> None:
         root = Path(self.root)
+        static = root / "src" / "citadel_agent" / "portal" / "static"
+        if (static / "index.html").is_file():
+            target = "citadel_agent/portal/static"
+            if self.target_name != "wheel":
+                target = "src/" + target
+            build_data.setdefault("force_include", {})[str(static)] = target
         assets = root / "src" / "citadel_agent" / "_assets"
-        if assets.is_dir():
-            return  # Already part of the module tree in an sdist.
-        assets = root / "build" / "runtime-assets"
-        build_assets(root, assets)
+        if not assets.is_dir():
+            assets = root / "build" / "runtime-assets"
+            build_assets(root, assets)
         target = "citadel_agent/_assets" if self.target_name == "wheel" else "src/citadel_agent/_assets"
         build_data.setdefault("force_include", {})[str(assets)] = target

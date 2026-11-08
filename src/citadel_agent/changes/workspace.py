@@ -11,6 +11,7 @@ per change set.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 
 from citadel_agent.changes.repository import CanonicalRepository
@@ -50,18 +51,22 @@ class CanonicalWorkspace:
         remote_url: str | None = None,
         base_branch: str = "main",
         upstream_path: str = DEFAULT_UPSTREAM_SUBMODULE,
+        git_environment: Mapping[str, str] | None = None,
     ) -> None:
         self.path = path.resolve()
         self.remote_url = remote_url
         self.base_branch = base_branch
         self.upstream_path = upstream_path
+        self.git_environment = git_environment
 
     @property
     def repository(self) -> CanonicalRepository:
         return CanonicalRepository(self.path, upstream_path=self.upstream_path)
 
     def _git(self, *args: str, check: bool = True) -> str:
-        return run_command("git", args, cwd=self.path, check=check, timeout=900).stdout.strip()
+        return run_command(
+            "git", args, cwd=self.path, check=check, timeout=900, extra_env=self.git_environment
+        ).stdout.strip()
 
     def has_remote(self) -> bool:
         result = run_command("git", ["remote"], cwd=self.path, check=False)
@@ -106,6 +111,7 @@ class CanonicalWorkspace:
                 ["clone", "--branch", self.base_branch, self.remote_url, str(self.path)],
                 cwd=self.path.parent,
                 timeout=1800,
+                extra_env=self.git_environment,
             )
             self._update_submodules()
         except CommandError as exc:

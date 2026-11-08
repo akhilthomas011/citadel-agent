@@ -19,13 +19,17 @@ dependencies = [
     "azure-mgmt-resource-deployments>=2.0.0",
     "azure-monitor-query>=2.0.0",
     "defusedxml>=0.7.1",
+    "fastapi>=0.141.1",
     "githubkit>=0.16.1",
     "httpx>=0.28.1",
+    "msal>=1.39.0",
+    "pyjwt[crypto]>=2.15.1",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.15.0",
     "pyyaml>=6.0.3",
     "rich>=15.0.0",
     "typer>=0.27.2",
+    "uvicorn[standard]>=0.40.0",
 ]
 
 [project.scripts]
@@ -39,6 +43,9 @@ devui = [
 [build-system]
 requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build]
+exclude = ["src/citadel_agent/_assets", "src/citadel_agent/portal/static"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/citadel_agent"]

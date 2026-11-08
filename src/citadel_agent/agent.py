@@ -118,6 +118,7 @@ def create_agent(
     client: Any = None,
     registry: ToolRegistry | None = None,
     middleware_factory: Callable[[ToolContext], list[Any]] | None = None,
+    instructions: str | None = None,
 ) -> AgentBundle:
     """Create the agent for the runtime's caller (tools and skills filtered by persona)."""
     from agent_framework import (
@@ -149,7 +150,7 @@ def create_agent(
         client=client or create_chat_client(runtime),
         name=AGENT_NAME,
         description=AGENT_DESCRIPTION,
-        instructions=build_instructions(runtime),
+        instructions=build_instructions(runtime) if instructions is None else instructions,
         tools=router.core,
         context_providers=[history, build_skills_provider(skills), router, compaction],
         middleware=middleware_factory(context) if middleware_factory else None,

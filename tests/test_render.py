@@ -116,6 +116,23 @@ BACKEND = {
     ],
     "modelAliases": [{"name": "smart", "models": ["gpt-5.2", "gpt-5.4-mini"]}],
 }
+PROVIDER_BACKEND = {
+    **BACKEND,
+    "backends": [
+        *BACKEND["backends"],
+        {
+            "backendId": "bedrock-api-key",
+            "backendType": "aws-bedrock",
+            "endpoint": "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "authType": "api-key-bearer",
+            "authConfig": {
+                "namedValueKey": "bedrock-api-key",
+                "keyVaultSecretUri": "https://kv-dev.vault.azure.net/secrets/bedrock-api-key",
+            },
+            "supportedModels": [{"name": "us.anthropic.claude-3-5-haiku-20241022-v1:0"}],
+        },
+    ],
+}
 PUBLISH = {
     "kind": "publish-contract",
     "environment": "dev",
@@ -224,6 +241,17 @@ def test_alerts_render_uses_scope_specific_prefix(repo: Path) -> None:
     assert "param productNameFilter = 'LLM HR ChatAgent DEV'" in params
 
 
+def test_provider_backend_renders_upstream_auth_references_without_secrets(repo: Path) -> None:
+    rendered = render_intent(parse_intent(PROVIDER_BACKEND), context(repo))
+    params = rendered.files[rendered.deployment.parameters_file]
+
+    assert "backendType: 'aws-bedrock'" in params
+    assert "authType: 'api-key-bearer'" in params
+    assert "namedValueKey: 'bedrock-api-key'" in params
+    assert "keyVaultSecretUri: 'https://kv-dev.vault.azure.net/secrets/bedrock-api-key'" in params
+    assert "secretValue" not in params
+
+
 def test_written_files_use_lf_line_endings(repo: Path, tmp_path: Path) -> None:
     rendered = render_intent(parse_intent(PUBLISH), context(repo))
     for path in rendered.write(tmp_path):
@@ -263,7 +291,9 @@ def test_extra_parameters_may_add_upstream_parameters_the_schema_does_not_model(
 
 @pytest.mark.az
 @pytest.mark.parametrize(
-    "intent_data", [ACCESS, BACKEND, PUBLISH, ALERTS], ids=["access", "backend", "publish", "alerts"]
+    "intent_data",
+    [ACCESS, BACKEND, PROVIDER_BACKEND, PUBLISH, ALERTS],
+    ids=["access", "backend", "provider-backend", "publish", "alerts"],
 )
 def test_rendered_parameters_compile_against_upstream(repo: Path, intent_data: dict[str, Any]) -> None:
     rendered = render_intent(parse_intent(intent_data), context(repo))
@@ -274,7 +304,7 @@ def test_rendered_parameters_compile_against_upstream(repo: Path, intent_data: d
         assert parameters["useCase"]["value"]["businessUnit"] == "HR"
         policy = parameters["services"]["value"][0]["policyXml"]
         assert "<policies>" in policy  # loadTextContent resolved the generated policy file
-    if intent_data is BACKEND:
+    if intent_data in (BACKEND, PROVIDER_BACKEND):
         assert parameters["modelAliases"]["value"][0]["name"] == "smart"
     json.dumps(parameters)  # fully JSON serializable
 

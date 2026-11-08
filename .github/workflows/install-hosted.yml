@@ -1,0 +1,107 @@
+name: install hosted product
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Protected customer environment with installation configuration and OIDC variables
+        type: environment
+        required: true
+      artifact_run_id:
+        description: Successful publish-hosted run from the default branch
+        type: string
+        required: true
+      source_sha:
+        description: Full reviewed source SHA used by the artifact run and infrastructure templates
+        type: string
+        required: true
+      agent_image:
+        description: Published public Linux release image pinned by digest
+        type: string
+        required: true
+      apply:
+        description: Provision private resources, grant scoped access and update the dedicated web app
+        type: boolean
+        default: false
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: hosted-deployment-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/verify-hosted-artifact.yml
+    with:
+      source_sha: ${{ inputs.source_sha }}
+      artifact_run_id: ${{ inputs.artifact_run_id }}
+
+  install:
+    needs: verify
+    runs-on: ${{ vars.CITADEL_DEPLOY_RUNNER || 'ubuntu-latest' }}
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: citadel-hosted-${{ inputs.source_sha }}
+          path: build/hosted
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+      - name: Validate artifact manifest before Azure sign-in
+        env:
+          AGENT_IMAGE: ${{ inputs.agent_image }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, zipfile
+          from pathlib import Path, PurePosixPath
+          root = Path("build/hosted")
+          manifest = json.loads((root / "hosted-manifest.json").read_text())
+          if (manifest.get("sourceSha") != os.environ["SOURCE_SHA"]
+              or manifest.get("imagePublished") is not True
+              or manifest.get("agentImage") != os.environ["AGENT_IMAGE"]):
+              raise SystemExit("Release manifest does not bind the reviewed source and published image.")
+          for field, name, digest in (
+              ("file", "citadel-portal.zip", "sha256"),
+              ("installerFile", "citadel-installer.zip", "installerSha256"),
+          ):
+              if (manifest.get(field) != name
+                  or hashlib.sha256((root / name).read_bytes()).hexdigest() != manifest.get(digest)):
+                  raise SystemExit("Release files differ from their publication manifest.")
+          with zipfile.ZipFile(root / "citadel-installer.zip") as archive:
+              for name in archive.namelist():
+                  if PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts or "\\" in name:
+                      raise SystemExit("Unsafe installer archive path.")
+              archive.extractall("build/installer")
+          PY
+      - uses: azure/login@8216e11d8cd9b42fe925c852af8e76311ff067ac # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Preview or install private hosting and applications
+        env:
+          CITADEL_INSTALL_CONFIG: ${{ vars.CITADEL_INSTALL_CONFIG }}
+          AGENT_IMAGE: ${{ inputs.agent_image }}
+          APPLY: ${{ inputs.apply }}
+          SUBSCRIPTION: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--config-env CITADEL_INSTALL_CONFIG --image "$AGENT_IMAGE"
+            --bundle build/hosted/citadel-portal.zip
+            --expected-subscription "$SUBSCRIPTION")
+          if [[ "$APPLY" == "true" ]]; then args+=(--apply); fi
+          python -I -S build/installer/install.py "${args[@]}"

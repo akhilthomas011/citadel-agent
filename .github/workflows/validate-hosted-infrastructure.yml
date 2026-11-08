@@ -1,0 +1,26 @@
+name: validate hosted infrastructure
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Compile private topology and example parameters without Azure sign-in
+        run: |
+          az bicep build --file infra/main.bicep --outfile build/infra/main.json
+          az bicep build-params --file infra/main.bicepparam --outfile build/infra/example.parameters.json
+      - name: Scan actual ARM resources, rejecting empty scanner results
+        run: |
+          python scripts/prepare_infra_scan.py --compiled build/infra/main.json --output build/infra/main.scan.json
+          uvx --python 3.11 --from checkov==3.4.0 checkov --framework arm --file build/infra/main.scan.json --skip-download --output json > build/infra/checkov.json
+          python scripts/prepare_infra_scan.py --result build/infra/checkov.json

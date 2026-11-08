@@ -15,11 +15,16 @@ import pytest
 import respx
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
 
+from citadel_agent.analytics.cursors import ScopedCosmosCursorSigner, cosmos_query_fingerprint
 from citadel_agent.azure_clients import arm, bicep, deployments
 from citadel_agent.azure_clients.apim import ApimClient
-from citadel_agent.azure_clients.cosmos import CosmosUsageReader
+from citadel_agent.azure_clients.cosmos import (
+    CosmosQueryPage,
+    CosmosUsageReader,
+)
 from citadel_agent.azure_clients.credentials import decode_token_claims, describe_principal
 from citadel_agent.azure_clients.keyvault import KeyVaultAccessError, KeyVaultReader
+from citadel_agent.portal.contracts import HubScope
 from citadel_agent.safety.redaction import REDACTED, Redactor
 
 
@@ -502,3 +507,162 @@ def test_cosmos_discovers_usage_database_and_binds_parameters() -> None:
     )
     assert rows == [{"totalTokens": "10"}]
     assert captured["parameters"] == [{"name": "@product", "value": "P"}]
+
+
+def test_cosmos_query_page_preserves_continuation_token_and_bounds_page_size() -> None:
+    captured: dict[str, Any] = {}
+
+    class PageIterator:
+        continuation_token = "next-page-token"
+
+        def __init__(self) -> None:
+            self._pages = iter([iter([{"id": "row-1"}])])
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self._pages)
+
+    class PagedResults:
+        def by_page(self, *, continuation_token: str | None):
+            captured["continuation_token"] = continuation_token
+            return PageIterator()
+
+    def query_items(**kwargs: Any) -> PagedResults:
+        captured.update(kwargs)
+        return PagedResults()
+
+    container = SimpleNamespace(query_items=query_items)
+    database = SimpleNamespace(get_container_client=lambda name: container)
+    fake = SimpleNamespace(get_database_client=lambda name: database)
+    reader = CosmosUsageReader(FakeCredential(), "https://acct.documents.azure.com:443/", client=fake)
+
+    page = reader.query_page(
+        "usage-db",
+        "llm-usage-container",
+        "SELECT * FROM c WHERE c.productName = @product",
+        {"product": "P"},
+        page_size=100,
+        continuation_token="prior-page-token",
+    )
+
+    assert page == CosmosQueryPage(items=({"id": "row-1"},), continuation_token="next-page-token")
+    assert captured["continuation_token"] == "prior-page-token"
+    assert captured["max_item_count"] == 100
+    assert captured["parameters"] == [{"name": "@product", "value": "P"}]
+
+
+def test_cosmos_scoped_page_binds_cursor_to_scope_and_query() -> None:
+    captured: dict[str, Any] = {}
+
+    class PageIterator:
+        continuation_token = "next-page-token"
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return iter([{"id": "row-1"}])
+
+    class PagedResults:
+        def by_page(self, *, continuation_token: str | None):
+            captured["continuation_token"] = continuation_token
+            return PageIterator()
+
+    def query_items(**kwargs: Any) -> PagedResults:
+        captured.update(kwargs)
+        return PagedResults()
+
+    container = SimpleNamespace(query_items=query_items)
+    database = SimpleNamespace(get_container_client=lambda name: container)
+    fake = SimpleNamespace(get_database_client=lambda name: database)
+    reader = CosmosUsageReader(FakeCredential(), "https://acct.documents.azure.com:443/", client=fake)
+    scope = HubScope(
+        tenant_id="11111111-1111-4111-8111-111111111111",
+        hub_id="citadel-production",
+        environment="prod",
+        subscription_id="22222222-2222-4222-8222-222222222222",
+    )
+    signer = ScopedCosmosCursorSigner(b"cursor-signing-key-32-bytes-long")
+    sql = "SELECT * FROM c WHERE c.productName = @product"
+    params = {"product": "P"}
+
+    page = reader.query_scoped_page(
+        "usage-db",
+        "llm-usage-container",
+        sql,
+        params,
+        scope=scope,
+        cursor_signer=signer,
+        page_size=100,
+    )
+    expected_fingerprint = cosmos_query_fingerprint(
+        sql,
+        params,
+        account_endpoint="https://acct.documents.azure.com:443/",
+        database="usage-db",
+        container="llm-usage-container",
+        page_size=100,
+    )
+    assert page.items == ({"id": "row-1"},)
+    assert page.cursor is not None
+    assert signer.read(page.cursor, scope=scope, query_fingerprint=expected_fingerprint) == "next-page-token"
+
+    reader.query_scoped_page(
+        "usage-db",
+        "llm-usage-container",
+        sql,
+        params,
+        scope=scope,
+        cursor_signer=signer,
+        cursor=page.cursor,
+        page_size=100,
+    )
+    assert captured["continuation_token"] == "next-page-token"
+
+
+def test_cosmos_queries_reject_invalid_result_limits() -> None:
+    reader = CosmosUsageReader(FakeCredential(), "https://acct.documents.azure.com:443/", client=object())
+
+    with pytest.raises(ValueError, match="max_items"):
+        reader.query("usage-db", "llm-usage-container", "SELECT * FROM c", max_items=0)
+    with pytest.raises(ValueError, match="page_size"):
+        reader.query_page("usage-db", "llm-usage-container", "SELECT * FROM c", page_size=1001)
+
+
+def test_cosmos_paging_uses_the_real_sdk_iterator_and_opaque_feed_range():
+    from azure.core.paging import ItemPaged
+
+    captured = {}
+    source_range = {"opaque-routing-value": "provided-by-cosmos"}
+
+    def query_items(**kwargs):
+        captured.update(kwargs)
+
+        def next_page(token):
+            assert token == "previous"
+            return [{"id": "row-1"}]
+
+        return ItemPaged(next_page, lambda block: ("next", block))
+
+    container = SimpleNamespace(query_items=query_items, read_feed_ranges=lambda: [source_range])
+    database = SimpleNamespace(get_container_client=lambda _: container)
+    reader = CosmosUsageReader(
+        FakeCredential(),
+        "https://usage.example",
+        client=SimpleNamespace(get_database_client=lambda _: database),
+    )
+    ranges = reader.read_feed_ranges("usage", "llm-usage-container")
+    page = reader.query_page(
+        "usage",
+        "llm-usage-container",
+        "SELECT * FROM c",
+        page_size=500,
+        continuation_token="previous",
+        feed_range=ranges[0],
+    )
+    assert page.continuation_token == "next"
+    assert page.items == ({"id": "row-1"},)
+    assert captured["feed_range"] == source_range
+    assert not hasattr(ItemPaged, "get_response_headers")

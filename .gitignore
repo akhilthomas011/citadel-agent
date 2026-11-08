@@ -23,6 +23,16 @@ uv.toml
 
 # Agent runtime state: drafts, change sets, sessions, audit logs
 .citadel-agent/
+.copilot-azure/
+.azure/
+
+# Hosted portal build artifacts
+frontend/node_modules/
+frontend/coverage/
+frontend/test-results/
+frontend/playwright-report/
+src/citadel_agent/portal/static/
+src/citadel_agent/_assets/
 
 # Editors and OS files
 .vscode/*

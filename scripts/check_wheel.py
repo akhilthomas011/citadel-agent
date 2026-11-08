@@ -12,7 +12,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 
-def check_wheel(path: Path) -> None:
+def check_wheel(path: Path, *, require_portal_ui: bool = False) -> None:
     prefix = "citadel_agent/_assets/"
     with zipfile.ZipFile(path) as wheel:
         names = wheel.namelist()
@@ -46,10 +46,18 @@ def check_wheel(path: Path) -> None:
         assert any(name.startswith("citadel_agent/knowledge/data/") for name in names)
         assert any(".dist-info/licenses/LICENSE" in name for name in names), "Agent license is missing"
         assert all(name.startswith("citadel_agent/") or ".dist-info/" in name for name in names)
+        if require_portal_ui:
+            ui = "citadel_agent/portal/static/"
+            assert ui + "index.html" in names, "Hosted portal index is missing"
+            assert any(name.startswith(ui + "assets/") and name.endswith(".js") for name in names)
+            assert any(name.startswith(ui + "assets/") and name.endswith(".css") for name in names)
+            assert not any(name.startswith(ui) and name.endswith(".map") for name in names)
         print(f"Wheel shape passed: {len(assets)} assets, upstream {lock['upstream']['commit']}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("wheel", type=Path)
-    check_wheel(parser.parse_args().wheel)
+    parser.add_argument("--require-portal-ui", action="store_true")
+    args = parser.parse_args()
+    check_wheel(args.wheel, require_portal_ui=args.require_portal_ui)
