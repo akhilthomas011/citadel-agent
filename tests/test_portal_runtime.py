@@ -1,6 +1,7 @@
 """Hosted app construction uses the configured managed identity and existing Cosmos state."""
 
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from azure.core.exceptions import HttpResponseError
@@ -106,10 +107,13 @@ def test_app_readiness_reports_cosmos_failure_without_leaking_details() -> None:
     assert response.json() == {"detail": "Portal state store is unavailable."}
 
 
-def test_bff_app_from_settings_loads_secret_and_checks_state_readiness() -> None:
+def test_bff_app_from_settings_loads_secret_and_checks_state_readiness(monkeypatch) -> None:
+    settings = _settings()
+    application = Mock(return_value=SimpleNamespace())
+    monkeypatch.setattr("citadel_agent.portal.runtime.ConfidentialClientApplication", application)
     container = FakeContainer()
     app = create_bff_app_from_settings(
-        _settings(),
+        settings,
         credential=FakeCredential(),
         cosmos_client=FakeCosmosClient(container),
         secret_reader=FakeSecretReader(),
@@ -118,6 +122,11 @@ def test_bff_app_from_settings_loads_secret_and_checks_state_readiness() -> None
     with TestClient(app) as client:
         assert client.get("/health/ready").json() == {"status": "ready"}
         assert client.get("/auth/session").json() == {"authenticated": False}
+    application.assert_called_once_with(
+        client_id=settings.client_id,
+        authority=f"https://login.microsoftonline.com/{settings.tenant_id}",
+        client_credential="test-only-secret",
+    )
 
 
 def test_hosted_runtime_rejects_insecure_endpoints() -> None:
